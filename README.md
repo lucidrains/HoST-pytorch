@@ -1,3 +1,5 @@
+<img src="./rewards.png" width="600px"></img>
+
 ## HoST - Pytorch (wip)
 
 Implementation of Humanoid Standing Up, from the paper <a href="https://taohuang13.github.io/humanoid-standingup.github.io/">Learning Humanoid Standing-up Control across Diverse Postures</a> out of Shanghai, in Pytorch
