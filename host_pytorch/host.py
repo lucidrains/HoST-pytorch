@@ -43,8 +43,13 @@ class MLP(Module):
         x
     ):
 
-        for layer in self.layers:
+        for ind, layer in enumerate(self.layers, start = 1):
+            is_last = ind == len(self.layers)
+
             x = layer(x)
+
+            if not is_last:
+                x = F.silu(x)
 
         return x
 
