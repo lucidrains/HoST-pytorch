@@ -4,7 +4,7 @@
 
 Implementation of Humanoid Standing Up, from the paper <a href="https://taohuang13.github.io/humanoid-standingup.github.io/">Learning Humanoid Standing-up Control across Diverse Postures</a> out of Shanghai, in Pytorch
 
-Besides for the set of reward functions, the other big contribution is identifying how crucial multiple critics are (with normalized advantages per reward group)
+Besides for the set of reward functions, the other contribution is validating [an approach using multiple critics](https://openreview.net/forum?id=rJvY_5OzoI) out of Boston University
 
 ## Citations
 
