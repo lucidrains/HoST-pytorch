@@ -4,6 +4,8 @@ import torch
 import torch.nn.functional as F
 from torch.nn import Module, ModuleList, Linear
 
+from hl_gauss_pytorch import HLGaussLoss
+
 # helper functions
 
 def exists(v):
