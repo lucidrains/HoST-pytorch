@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import torch
+from torch import tensor
 import torch.nn.functional as F
 from torch.nn import Module, ModuleList, Linear
 
 from hl_gauss_pytorch import HLGaussLoss
 
-from einops import repeat
+from einops import repeat, rearrange
 from einops.layers.torch import EinMix as Mix
 
 # helper functions
@@ -98,41 +99,40 @@ class GroupedMLP(Module):
 
         return x
 
-class Actor(Module):
-    def __init__(
-        self,
-        dims = (512, 256, 128)
-    ):
-        super().__init__()
-
-        self.mlp = MLP(*dims)
-
-    def forward(
-        self,
-        x
-    ):
-        return self.mlp(x)
-
-class Critic(Module):
-    def __init__(
-        self,
-        dims = (512, 256)
-    ):
-        super().__init__()
-
-        self.mlp = MLP(*dims)
-
-    def forward(
-        self,
-        x
-    ):
-        return self.mlp(x)
+def Actor(
+    dims = (512, 256, 128)
+):
+    dims = (*dims, 1)
+    return MLP(*dims)
 
 class Critics(Module):
     def __init__(
         self,
-        critics: list[Critic]
+        weights: tuple[float, ...],
+        dims: tuple[int, ...] = (512, 256),
+        num_critics = 4,
     ):
         super().__init__()
+        dims = (*dims, 1)
 
-        self.critics = critics
+        self.mlps = GroupedMLP(*dims, num_mlps = num_critics)
+
+        assert len(weights) == num_critics
+        self.register_buffer('weights', tensor(weights))
+
+    def forward(
+        self,
+        x,
+        rewards = None # Float['b g']
+    ):
+        values = self.mlps(x)
+        values = rearrange(values, 'b g 1 -> g b')
+
+        if not exists(rewards):
+            return values
+
+        batch = values.shape[0]
+        advantages = rewards - values
+
+        weighted_norm_advantages = F.layer_norm(advantages, (batch,)) * self.weights
+        return weighted_norm_advantages.sum()
