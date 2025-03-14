@@ -7,6 +7,7 @@ from torch.nn import Module, ModuleList, Linear
 
 from hl_gauss_pytorch import HLGaussLoss
 
+import einx
 from einops import repeat, rearrange, reduce
 from einops.layers.torch import EinMix as Mix
 
@@ -126,13 +127,17 @@ class Critics(Module):
         rewards = None # Float['b g']
     ):
         values = self.mlps(x)
-        values = rearrange(values, 'b g 1 -> g b')
+        values = rearrange(values, '... 1 -> ...')
 
         if not exists(rewards):
             return values
 
         batch = values.shape[0]
+
         advantages = rewards - values
 
-        weighted_norm_advantages = F.layer_norm(advantages, (batch,)) * self.weights
+        advantages = rearrange(advantages, 'b g -> g b')
+        norm_advantages = F.layer_norm(advantages, (batch,))
+
+        weighted_norm_advantages = einx.multiply('g b, g', norm_advantages, self.weights)
         return reduce(weighted_norm_advantages, 'g b -> b', 'sum')
