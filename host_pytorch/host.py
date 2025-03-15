@@ -100,11 +100,15 @@ class GroupedMLP(Module):
 
         return x
 
+# actor
+
 def Actor(
     dims = (512, 256, 128)
 ):
     dims = (*dims, 1)
     return MLP(*dims)
+
+# critics
 
 class Critics(Module):
     def __init__(
@@ -121,6 +125,22 @@ class Critics(Module):
         assert len(weights) == num_critics
         self.register_buffer('weights', tensor(weights))
 
+    @torch.no_grad()
+    def calc_advantages(
+        self,
+        values,
+        rewards
+    ):
+        batch = values.shape[0]
+
+        advantages = rewards - values
+
+        advantages = rearrange(advantages, 'b g -> g b')
+        norm_advantages = F.layer_norm(advantages, (batch,))
+
+        weighted_norm_advantages = einx.multiply('g b, g', norm_advantages, self.weights)
+        return reduce(weighted_norm_advantages, 'g b -> b', 'sum')
+
     def forward(
         self,
         x,
@@ -132,12 +152,4 @@ class Critics(Module):
         if not exists(rewards):
             return values
 
-        batch = values.shape[0]
-
-        advantages = rewards - values
-
-        advantages = rearrange(advantages, 'b g -> g b')
-        norm_advantages = F.layer_norm(advantages, (batch,))
-
-        weighted_norm_advantages = einx.multiply('g b, g', norm_advantages, self.weights)
-        return reduce(weighted_norm_advantages, 'g b -> b', 'sum')
+        return F.mse_loss(rewards, values)
