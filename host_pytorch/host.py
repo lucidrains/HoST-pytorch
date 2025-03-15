@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 from torch import tensor
 import torch.nn.functional as F
+from torch.distributions import Categorical
 from torch.nn import Module, ModuleList, Linear
 
 from hl_gauss_pytorch import HLGaussLoss
@@ -19,6 +20,21 @@ def exists(v):
 def default(v, d):
     return v if exists(v) else d
 
+# sampling related
+
+def log(t, eps = 1e-20):
+    return torch.log(t.clamp(min = eps))
+
+def calc_entropy(prob, eps = 1e-20, dim = -1):
+    return -(prob * log(prob, eps)).sum(dim = dim)
+
+def gumbel_noise(t):
+    noise = torch.zeros_like(t).uniform_(0, 1)
+    return -log(-log(noise))
+
+def gumbel_sample(t, temperature = 1., dim = -1, keepdim = True):
+    return ((t / max(temperature, 1e-10)) + gumbel_noise(t)).argmax(dim = dim, keepdim = keepdim)
+
 # reward functions - following table 6
 
 # task rewards
@@ -29,7 +45,9 @@ def default(v, d):
 
 # post task reward
 
-# actor critic networks
+# networks
+
+# simple mlp for actor
 
 class MLP(Module):
     def __init__(
@@ -59,6 +77,82 @@ class MLP(Module):
                 x = F.silu(x)
 
         return x
+
+# actor
+
+class Actor(Module):
+    def __init__(
+        self,
+        num_actions,
+        dims: tuple[int, ...] = (512, 256, 128),
+        eps_clip = 0.2,
+        beta_s = .01,
+    ):
+        super().__init__()
+
+        dims = (*dims, num_actions)
+
+        self.net = MLP(*dims)
+
+        # ppo loss related
+
+        self.eps_clip = eps_clip
+        self.beta_s = beta_s
+
+    def forward_for_loss(
+        self,
+        state,
+        actions,
+        old_log_probs,
+        advantages
+    ):
+        clip = self.eps_clip
+        logits = self.net(state)
+
+        prob = logits.softmax(dim = -1)
+
+        distribution = Categorical(prob)
+
+        log_probs = distribution.log_prob(actions)
+
+        ratios = (log_probs - old_log_probs).exp()
+
+        # classic clipped surrogate objective from ppo
+
+        surr1 = ratios * advantages
+        surr2 = ratios.clamp(1. - clip, 1. + clip) * advantages
+        loss = -torch.min(surr1, surr2) - self.beta_s * calc_entropy(prob)
+
+        return loss.sum()
+
+    def forward(
+        self,
+        state,
+        sample = False,
+        sample_return_log_prob = True
+    ):
+
+        logits = self.net(state)
+
+        prob = logits.softmax(dim = -1)
+
+        if not sample:
+            return prob
+
+        distribution = Categorical(prob)
+
+        actions = distribution.sample()
+
+        log_prob = distribution.log_prob(actions)
+
+        if not sample_return_log_prob:
+            return sampled_actions
+
+        return actions, log_prob
+
+# grouped mlp
+# for multiple critics in one forward pass
+# all critics must share the same MLP network structure
 
 class GroupedMLP(Module):
     def __init__(
@@ -100,14 +194,6 @@ class GroupedMLP(Module):
 
         return x
 
-# actor
-
-def Actor(
-    dims = (512, 256, 128)
-):
-    dims = (*dims, 1)
-    return MLP(*dims)
-
 # critics
 
 class Critics(Module):
@@ -143,10 +229,10 @@ class Critics(Module):
 
     def forward(
         self,
-        x,
+        state,
         rewards = None # Float['b g']
     ):
-        values = self.mlps(x)
+        values = self.mlps(state)
         values = rearrange(values, '... 1 -> ...')
 
         if not exists(rewards):
