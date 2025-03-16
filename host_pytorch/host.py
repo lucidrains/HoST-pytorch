@@ -153,6 +153,46 @@ def reward_feet_parallel(state):
     """ In encourages the feet to be parallel to each other. """
     raise NotImplementedError
 
+# reward config with all the weights
+
+REWARD_CONFIG = [
+    ('task', 2.5, [
+        (reward_head_height, 1),
+        (reward_base_orientation, 1),
+    ]),
+    ('style', 1., [
+        (reward_waist_yaw_deviation, -10),
+        (reward_hip_roll_yaw_deviation, -10 / 10),
+        (reward_shoulder_roll_deviation, -0.25 / -10),
+        (reward_foot_displacement, -2.5),
+        (reward_ankle_parallel, 2.5 / 2.5),
+        (reward_foot_distance, 20),
+        (reward_foot_stumble, -10),
+        (reward_shank_orientation, 0 / -25), # do not understand this 0(G) / -25(PSW)
+        (reward_waist_yaw_deviation, 10),
+        (reward_base_angular_velocity, 1),
+    ]),
+    ('regularization', 0.1, [
+        (reward_joint_acceleration, -2.5e-7),
+        (reward_action_rate, -1e-2),
+        (reward_smoothness, -1e-2),
+        (reward_torques, -2.5e-6),
+        (reward_joint_power, -2.5e-5),
+        (reward_joint_velocity, -1e-4),
+        (reward_joint_tracking_error, -2.5e-1),
+        (reward_joint_pos_limits, -1e2),
+        (reward_joint_vel_limits, -1.),
+    ]),
+    ('post_task', 1, [
+        (reward_base_angular_velocity, 10),
+        (reward_base_linear_velocity, 10),
+        (reward_base_orientation, 10),
+        (reward_base_height, 10),
+        (reward_upper_body_posture, 10),
+        (reward_feet_parallel, 2.5),
+    ])
+]
+
 # === networks ===
 
 # simple mlp for actor
