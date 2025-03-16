@@ -35,17 +35,125 @@ def gumbel_noise(t):
 def gumbel_sample(t, temperature = 1., dim = -1, keepdim = True):
     return ((t / max(temperature, 1e-10)) + gumbel_noise(t)).argmax(dim = dim, keepdim = keepdim)
 
-# reward functions - following table 6
+# === reward functions === table 6 - they have a mistake where they redefine ankle parallel reward twice
 
-# task rewards
+# task rewards - It specifies the high-level task objectives.
 
-# style rewards
+def reward_head_height(state):
+    """ The head of robot head in the world frame """
+    raise NotImplementedError
 
-# regularization rewards
+def reward_base_orientation(state):
+    """ The orientation of the robot base represented by projected gravity vector. """
+    raise NotImplementedError
 
-# post task reward
+# style rewards - It specifies the style of standing-up motion.
 
-# networks
+def reward_waist_yaw_deviation(state):
+    """ It penalizes the large joint angle of the waist yaw. """
+    raise NotImplementedError
+
+def reward_hip_roll_yaw_deviation(state):
+    """ It penalizes the large joint angle of hip roll/yaw joints. """
+    raise NotImplementedError
+
+def reward_shoulder_roll_deviation(state):
+    """ It penalizes the large joint angle of shoulder roll joint. """
+    raise NotImplementedError
+
+def reward_foot_displacement(state):
+    """ It encourages robot CoM locates in support polygon """
+    raise NotImplementedError
+
+def reward_ankle_parallel(state):
+    """ It encourages the ankles to be parallel to the ground via ankle keypoints. """
+    raise NotImplementedError
+
+def reward_foot_distance(state):
+    """ It penalizes a far distance between feet. """
+    raise NotImplementedError
+
+def reward_foot_stumble(state):
+    """ It penalizes a horizontal contact force with the environment. """
+    raise NotImplementedError
+
+def reward_shank_orientation(state):
+    """ It encourages the left/right shank to be perpendicular to the ground. """
+    raise NotImplementedError
+
+def reward_waist_yaw_deviation(state):
+    """ It penalizes the large joint angle of the waist yaw. """
+    raise NotImplementedError
+
+def reward_base_angular_velocity(state):
+    """ It encourages low angular velocity of the during rising up. """
+    raise NotImplementedError
+
+# regularization rewards - It specifies the regulariztaion on standing-up motion.
+
+def reward_joint_acceleration(state):
+    """ It penalizes the high joint accelrations. """
+    raise NotImplementedError
+
+def reward_action_rate(state):
+    """ It penalizes the high changing speed of action. """
+    raise NotImplementedError
+
+def reward_smoothness(state):
+    """ It penalizes the discrepancy between consecutive actions. """
+    raise NotImplementedError
+
+def reward_torques(state):
+    """ It penalizes the high joint torques. """
+    raise NotImplementedError
+
+def reward_joint_power(state):
+    """ It penalizes the high joint power """
+    raise NotImplementedError
+
+def reward_joint_velocity(state):
+    """ It penalizes the high joint velocity. """
+    raise NotImplementedError
+
+def reward_joint_tracking_error(state):
+    """ It penalizes the error between PD target (Eq. (1)) and actual joint position. """
+    raise NotImplementedError
+
+def reward_joint_pos_limits(state):
+    """ It penalizes the joint position that beyond limits. """
+    raise NotImplementedError
+
+def reward_joint_vel_limits(state):
+    """ It penalizes the joint velocity that beyond limits. """
+    raise NotImplementedError
+
+# post task reward - It specifies the desired behaviors after a successful standing up.
+
+def reward_base_angular_velocity(state):
+    """ It encourages low angular velocity of robot base after standing up. """
+    raise NotImplementedError
+
+def reward_base_linear_velocity(state):
+    """ It encourages low linear velocity of robot base after standing up. """
+    raise NotImplementedError
+
+def reward_base_orientation(state):
+    """ It encourages the robot base to be perpendicular to the ground. """
+    raise NotImplementedError
+
+def reward_base_height(state):
+    """ It encourages the robot base to reach a target height. """
+    raise NotImplementedError
+
+def reward_upper_body_posture(state):
+    """ It encourages the robot to track a target upper body postures. """
+    raise NotImplementedError
+
+def reward_feet_parallel(state):
+    """ In encourages the feet to be parallel to each other. """
+    raise NotImplementedError
+
+# === networks ===
 
 # simple mlp for actor
 
