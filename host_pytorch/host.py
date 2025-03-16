@@ -62,7 +62,7 @@ def reward_shoulder_roll_deviation(state):
     raise NotImplementedError
 
 def reward_foot_displacement(state):
-    """ It encourages robot CoM locates in support polygon """
+    """ It encourages robot CoM locates in support polygon, inspired by https://ieeexplore.ieee.org/document/1308858 """
     raise NotImplementedError
 
 def reward_ankle_parallel(state):
