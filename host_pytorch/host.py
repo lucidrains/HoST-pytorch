@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import torch
-from torch import tensor
+from torch import tensor, stack
 import torch.nn.functional as F
 from torch.distributions import Categorical
 from torch.nn import Module, ModuleList, Linear
@@ -192,6 +192,52 @@ REWARD_CONFIG = [
         (reward_feet_parallel, 2.5),
     ])
 ]
+
+class RewardShapingWrapper(Module):
+    def __init__(
+        self,
+        config = REWARD_CONFIG,
+        critics_kwargs: dict = dict()
+    ):
+        super().__init__()
+
+        self.config = config
+
+        # based on the reward group config
+        # can instantiate the critics automatically
+
+        num_reward_groups = len(config)
+        critics_weights = [reward_group_weight for _, reward_group_weight, _ in config]
+
+        self.critics = Critics(
+            critics_weights,
+            num_critics = num_reward_groups,
+            **critics_kwargs
+        )
+
+        # then store the weights of the individual reward shaping functions, per group
+
+        num_reward_fns = [len(reward_group_fns) for _, _, reward_group_fns in config]
+        self.split_dims = num_reward_fns
+
+        reward_fn_weights = tensor([weight for _, _, reward_group_fns in config for _, weight in reward_group_fns])
+        self.register_buffer('reward_weights', reward_fn_weights)
+
+        self.reward_fns = [reward_fn for _, _, reward_group_fns in config for reward_fn, _ in reward_group_fns]
+
+    def forward(
+        self,
+        state
+    ):
+        rewards = tensor([reward_fn(state) for reward_fn in self.reward_fns])
+
+        weighted_rewards = rewards * self.reward_weights
+
+        weighted_rewards_by_groups = weighted_rewards.split(self.split_dims)
+
+        rewards = stack([reward_group.sum() for reward_group in weighted_rewards_by_groups])
+
+        return rewards
 
 # === networks ===
 
