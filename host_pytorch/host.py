@@ -40,6 +40,28 @@ def get_log_prob(t, indices, is_prob = False):
     sel_log_probs = log_probs.gather(-1, indices)
     return rearrange(sel_log_probs, '... 1 -> ...')
 
+# generalized advantage estimate
+
+def calc_gae(
+    rewards,
+    values,
+    masks,
+    gamma = 0.99,
+    lam = 0.95
+):
+
+    device = rewards.device
+
+    gae = 0.
+    returns = torch.empty_like(rewards)
+
+    for i in reversed(range(len(rewards))):
+        delta = rewards[i] + gamma * values[i + 1] * masks[i] - values[i]
+        gae = delta + gamma * lam * masks[i] * gae
+        returns[i] = gae + values[i]
+
+    return returns
+
 # === reward functions === table 6 - they have a mistake where they redefine ankle parallel reward twice
 
 # task rewards - It specifies the high-level task objectives.
