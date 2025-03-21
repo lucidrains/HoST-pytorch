@@ -3,7 +3,6 @@ from __future__ import annotations
 import torch
 from torch import tensor, stack
 import torch.nn.functional as F
-from torch.distributions import Categorical
 from torch.nn import Module, ModuleList, Linear
 
 from hl_gauss_pytorch import HLGaussLoss
@@ -32,8 +31,14 @@ def gumbel_noise(t):
     noise = torch.zeros_like(t).uniform_(0, 1)
     return -log(-log(noise))
 
-def gumbel_sample(t, temperature = 1., dim = -1, keepdim = True):
-    return ((t / max(temperature, 1e-10)) + gumbel_noise(t)).argmax(dim = dim, keepdim = keepdim)
+def gumbel_sample(t, temperature = 1., dim = -1):
+    return ((t / max(temperature, 1e-10)) + gumbel_noise(t)).argmax(dim = dim)
+
+def get_log_prob(t, indices, is_prob = False):
+    log_probs = t.log_softmax(dim = -1) if not is_prob else log(t)
+    indices = rearrange(indices, '... -> ... 1')
+    sel_log_probs = log_probs.gather(-1, indices)
+    return rearrange(sel_log_probs, '... 1 -> ...')
 
 # === reward functions === table 6 - they have a mistake where they redefine ankle parallel reward twice
 
@@ -305,9 +310,9 @@ class Actor(Module):
 
         prob = logits.softmax(dim = -1)
 
-        distribution = Categorical(prob)
+        actions = gumbel_sample(logits, dim = -1)
 
-        log_probs = distribution.log_prob(actions)
+        log_probs = get_log_prob(prob, actions, is_prob = True)
 
         ratios = (log_probs - old_log_probs).exp()
 
@@ -328,16 +333,13 @@ class Actor(Module):
 
         logits = self.net(state)
 
-        prob = logits.softmax(dim = -1)
-
         if not sample:
+            prob = logits.softmax(dim = -1)
             return prob
 
-        distribution = Categorical(prob)
+        actions = gumbel_sample(logits, dim = -1)
 
-        actions = distribution.sample()
-
-        log_prob = distribution.log_prob(actions)
+        log_prob = get_log_prob(logits, actions)
 
         if not sample_return_log_prob:
             return sampled_actions
