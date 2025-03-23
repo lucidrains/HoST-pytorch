@@ -1,4 +1,5 @@
 from __future__ import annotations
+from dataclasses import dataclass
 
 import torch
 from torch import tensor, stack
@@ -64,6 +65,11 @@ def calc_gae(
 
 # === reward functions === table 6 - they have a mistake where they redefine ankle parallel reward twice
 
+@dataclass
+class State:
+    joint_velocity: Float['d']
+    joint_acceleration: Float['d']
+
 # task rewards - It specifies the high-level task objectives.
 
 def reward_head_height(state):
@@ -120,7 +126,8 @@ def reward_base_angular_velocity(state):
 
 def reward_joint_acceleration(state):
     """ It penalizes the high joint accelrations. """
-    raise NotImplementedError
+
+    return state.joint_acceleration.norm(dim = -1) ** 2
 
 def reward_action_rate(state):
     """ It penalizes the high changing speed of action. """
@@ -140,7 +147,8 @@ def reward_joint_power(state):
 
 def reward_joint_velocity(state):
     """ It penalizes the high joint velocity. """
-    raise NotImplementedError
+
+    return state.joint_velocity.norm(dim = -1) ** 2
 
 def reward_joint_tracking_error(state):
     """ It penalizes the error between PD target (Eq. (1)) and actual joint position. """
