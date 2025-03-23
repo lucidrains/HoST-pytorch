@@ -27,3 +27,13 @@ Besides for the set of reward functions, the other contribution is validating [a
     url    = {https://api.semanticscholar.org/CorpusID:268253088}
 }
 ```
+
+```bibtex
+@article{Tao2022LearningTG,
+    title  = {Learning to Get Up},
+    author = {Tianxin Tao and Matthew Wilson and Ruiyu Gou and Michiel van de Panne},
+    journal = {ACM SIGGRAPH 2022 Conference Proceedings},
+    year   = {2022},
+    url    = {https://api.semanticscholar.org/CorpusID:248496244}
+}
+```
