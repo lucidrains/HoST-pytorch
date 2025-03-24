@@ -12,6 +12,10 @@ import einx
 from einops import repeat, rearrange, reduce
 from einops.layers.torch import EinMix as Mix
 
+# constants
+
+INF = float('inf')
+
 # helper functions
 
 def exists(v):
@@ -67,6 +71,7 @@ def calc_gae(
 
 @dataclass
 class State:
+    head_height: Float['']
     joint_velocity: Float['d']
     joint_acceleration: Float['d']
 
@@ -103,7 +108,8 @@ def ftol(
 
 def reward_head_height(state):
     """ The head of robot head in the world frame """
-    raise NotImplementedError
+
+    return ftol(state.head_height, (1., INF), 1., 0.05)
 
 def reward_base_orientation(state):
     """ The orientation of the robot base represented by projected gravity vector. """
@@ -291,8 +297,10 @@ class RewardShapingWrapper(Module):
 
     def forward(
         self,
-        state
+        state: State
     ):
+        assert isinstance(state, State)
+
         rewards = tensor([reward_fn(state) for reward_fn in self.reward_fns])
 
         weighted_rewards = rewards * self.reward_weights
