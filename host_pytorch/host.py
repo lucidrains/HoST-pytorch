@@ -70,6 +70,35 @@ class State:
     joint_velocity: Float['d']
     joint_acceleration: Float['d']
 
+# the f_tol function in the paper
+
+# which is a reward shaping function that defines a reward of 1. for anything between the bounds, 0. anything outside the margins, and then some margin value with a gaussian shape otherwise
+# this came from "deepmind control" paper - https://github.com/google-deepmind/dm_control/blob/46390cfc356dfcb4235a2417efb2c3ab260194b8/dm_control/utils/rewards.py#L93
+# we will just stick with the default gaussian, and what was used in this paper, for simplicity
+
+def ftol(
+    value: Tensor,
+    bounds: tuple[float, float],
+    margin = 0.,
+    value_at_margin = 0.1
+):
+    low, high = bounds
+
+    assert low < high, 'invalid bounds'
+    assert margin >= 0., 'margin must be greater equal to 0.'
+
+    in_bounds = low <= value <= high
+
+    if margin == 0.:
+        return in_bounds.float()
+
+    # gaussian sigmoid
+
+    distance_margin = torch.where(x < low, low - x, x - high) / margin
+
+    scale = torch.sqrt(-2 * value_at_margin.log())
+    return (-0.5 * (distance_margin * scale).pow(2)).exp()
+
 # task rewards - It specifies the high-level task objectives.
 
 def reward_head_height(state):
