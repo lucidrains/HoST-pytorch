@@ -107,12 +107,12 @@ def ftol(
 
 # task rewards - It specifies the high-level task objectives.
 
-def reward_head_height(state):
+def reward_head_height(state: State):
     """ The head of robot head in the world frame """
 
     return ftol(state.head_height, (1., INF), 1., 0.1)
 
-def reward_base_orientation(state):
+def reward_base_orientation(state: State):
     """ The orientation of the robot base represented by projected gravity vector. """
 
     θz_base = state.projected_gravity_vector
@@ -120,109 +120,109 @@ def reward_base_orientation(state):
 
 # style rewards - It specifies the style of standing-up motion.
 
-def reward_waist_yaw_deviation(state):
+def reward_waist_yaw_deviation(state: State):
     """ It penalizes the large joint angle of the waist yaw. """
     raise NotImplementedError
 
-def reward_hip_roll_yaw_deviation(state):
+def reward_hip_roll_yaw_deviation(state: State):
     """ It penalizes the large joint angle of hip roll/yaw joints. """
     raise NotImplementedError
 
-def reward_shoulder_roll_deviation(state):
+def reward_shoulder_roll_deviation(state: State):
     """ It penalizes the large joint angle of shoulder roll joint. """
     raise NotImplementedError
 
-def reward_foot_displacement(state):
+def reward_foot_displacement(state: State):
     """ It encourages robot CoM locates in support polygon, inspired by https://ieeexplore.ieee.org/document/1308858 """
     raise NotImplementedError
 
-def reward_ankle_parallel(state):
+def reward_ankle_parallel(state: State):
     """ It encourages the ankles to be parallel to the ground via ankle keypoints. """
     raise NotImplementedError
 
-def reward_foot_distance(state):
+def reward_foot_distance(state: State):
     """ It penalizes a far distance between feet. """
     raise NotImplementedError
 
-def reward_foot_stumble(state):
+def reward_foot_stumble(state: State):
     """ It penalizes a horizontal contact force with the environment. """
     raise NotImplementedError
 
-def reward_shank_orientation(state):
+def reward_shank_orientation(state: State):
     """ It encourages the left/right shank to be perpendicular to the ground. """
     raise NotImplementedError
 
-def reward_waist_yaw_deviation(state):
+def reward_waist_yaw_deviation(state: State):
     """ It penalizes the large joint angle of the waist yaw. """
     raise NotImplementedError
 
-def reward_base_angular_velocity(state):
+def reward_base_angular_velocity(state: State):
     """ It encourages low angular velocity of the during rising up. """
     raise NotImplementedError
 
 # regularization rewards - It specifies the regulariztaion on standing-up motion.
 
-def reward_joint_acceleration(state):
+def reward_joint_acceleration(state: State):
     """ It penalizes the high joint accelrations. """
 
     return state.joint_acceleration.norm(dim = -1) ** 2
 
-def reward_action_rate(state):
+def reward_action_rate(state: State):
     """ It penalizes the high changing speed of action. """
     raise NotImplementedError
 
-def reward_smoothness(state):
+def reward_smoothness(state: State):
     """ It penalizes the discrepancy between consecutive actions. """
     raise NotImplementedError
 
-def reward_torques(state):
+def reward_torques(state: State):
     """ It penalizes the high joint torques. """
     raise NotImplementedError
 
-def reward_joint_power(state):
+def reward_joint_power(state: State):
     """ It penalizes the high joint power """
     raise NotImplementedError
 
-def reward_joint_velocity(state):
+def reward_joint_velocity(state: State):
     """ It penalizes the high joint velocity. """
 
     return state.joint_velocity.norm(dim = -1) ** 2
 
-def reward_joint_tracking_error(state):
+def reward_joint_tracking_error(state: State):
     """ It penalizes the error between PD target (Eq. (1)) and actual joint position. """
     raise NotImplementedError
 
-def reward_joint_pos_limits(state):
+def reward_joint_pos_limits(state: State):
     """ It penalizes the joint position that beyond limits. """
     raise NotImplementedError
 
-def reward_joint_vel_limits(state):
+def reward_joint_vel_limits(state: State):
     """ It penalizes the joint velocity that beyond limits. """
     raise NotImplementedError
 
 # post task reward - It specifies the desired behaviors after a successful standing up.
 
-def reward_base_angular_velocity(state):
+def reward_base_angular_velocity(state: State):
     """ It encourages low angular velocity of robot base after standing up. """
     raise NotImplementedError
 
-def reward_base_linear_velocity(state):
+def reward_base_linear_velocity(state: State):
     """ It encourages low linear velocity of robot base after standing up. """
     raise NotImplementedError
 
-def reward_base_orientation(state):
+def reward_base_orientation(state: State):
     """ It encourages the robot base to be perpendicular to the ground. """
     raise NotImplementedError
 
-def reward_base_height(state):
+def reward_base_height(state: State):
     """ It encourages the robot base to reach a target height. """
     raise NotImplementedError
 
-def reward_upper_body_posture(state):
+def reward_upper_body_posture(state: State):
     """ It encourages the robot to track a target upper body postures. """
     raise NotImplementedError
 
-def reward_feet_parallel(state):
+def reward_feet_parallel(state: State):
     """ In encourages the feet to be parallel to each other. """
     raise NotImplementedError
 
