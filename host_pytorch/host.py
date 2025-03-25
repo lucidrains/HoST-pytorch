@@ -72,6 +72,7 @@ def calc_gae(
 @dataclass
 class State:
     head_height: Float['']
+    projected_gravity_vector: Float[''] # orientation of robot base
     joint_velocity: Float['d']
     joint_acceleration: Float['d']
 
@@ -109,11 +110,13 @@ def ftol(
 def reward_head_height(state):
     """ The head of robot head in the world frame """
 
-    return ftol(state.head_height, (1., INF), 1., 0.05)
+    return ftol(state.head_height, (1., INF), 1., 0.1)
 
 def reward_base_orientation(state):
     """ The orientation of the robot base represented by projected gravity vector. """
-    raise NotImplementedError
+
+    θz_base = state.projected_gravity_vector
+    return ftol(-θz_base, (0.99, INF), 1., 0.05)
 
 # style rewards - It specifies the style of standing-up motion.
 
