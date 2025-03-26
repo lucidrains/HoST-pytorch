@@ -76,6 +76,8 @@ class State:
     joint_velocity: Float['d']
     joint_acceleration: Float['d']
     joint_torque: Float['d']
+    left_ankle_keypoint_z: Float['d']
+    right_ankle_keypoint_z: Float['d']
 
 # the f_tol function in the paper
 
@@ -137,9 +139,17 @@ def reward_foot_displacement(state: State):
     """ It encourages robot CoM locates in support polygon, inspired by https://ieeexplore.ieee.org/document/1308858 """
     raise NotImplementedError
 
-def reward_ankle_parallel(state: State):
+def reward_ankle_parallel(state: State, *, thres: 0.05):
     """ It encourages the ankles to be parallel to the ground via ankle keypoints. """
-    raise NotImplementedError
+
+    left_qz = state.left_ankle_keypoint_z
+    right_qz = state.right_ankle_keypoint_z
+
+    var = lambda t: t.var(dim = -1, unbiased = True)
+
+    ankle_is_parallel = ((var(left_qz) + var(right_qz)) * 0.5) < thres
+
+    return ankle_is_parallel.float()
 
 def reward_foot_distance(state: State):
     """ It penalizes a far distance between feet. """
