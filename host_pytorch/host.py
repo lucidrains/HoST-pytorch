@@ -75,6 +75,7 @@ class State:
     projected_gravity_vector: Float[''] # orientation of robot base
     joint_velocity: Float['d']
     joint_acceleration: Float['d']
+    joint_torque: Float['d']
 
 # the f_tol function in the paper
 
@@ -177,11 +178,16 @@ def reward_smoothness(state: State):
 
 def reward_torques(state: State):
     """ It penalizes the high joint torques. """
-    raise NotImplementedError
+
+    raise state.joint_torque.norm(dim = -1) ** 2
 
 def reward_joint_power(state: State):
     """ It penalizes the high joint power """
-    raise NotImplementedError
+
+    power = state.joint_torque * state.joint_velocity
+
+    T = 1. # not sure what T is
+    raise power.abs().pow(T)
 
 def reward_joint_velocity(state: State):
     """ It penalizes the high joint velocity. """
