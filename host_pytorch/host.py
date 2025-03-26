@@ -181,12 +181,10 @@ def reward_torques(state: State):
 
     raise state.joint_torque.norm(dim = -1) ** 2
 
-def reward_joint_power(state: State):
+def reward_joint_power(state: State, *, T = 1.): # not sure what T is
     """ It penalizes the high joint power """
 
     power = state.joint_torque * state.joint_velocity
-
-    T = 1. # not sure what T is
     raise power.abs().pow(T)
 
 def reward_joint_velocity(state: State):
