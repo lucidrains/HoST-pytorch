@@ -78,6 +78,11 @@ class State:
     joint_torque: Float['d']
     left_ankle_keypoint_z: Float['d']
     right_ankle_keypoint_z: Float['d']
+    left_shank_angle: Float['']
+    right_shank_angle: Float['']
+    height_base: Float['']
+    height_stage1_thres: Float['']  # they divide standing up into 2 phases, by whether the height_base reaches thresholds of stage 1 and stage2
+    height_stage2_thres: Float['']
 
 # the f_tol function in the paper
 
@@ -161,7 +166,11 @@ def reward_foot_stumble(state: State):
 
 def reward_shank_orientation(state: State):
     """ It encourages the left/right shank to be perpendicular to the ground. """
-    raise NotImplementedError
+
+    is_past_stage1 = (state.height_base > state.height_stage1_thres).float()
+    θlr = (state.left_shank_angle + state.right_shank_angle) * 0.5
+
+    return ftol(θlr, (0.8, INF), 1., 0.1) * is_past_stage1
 
 def reward_waist_yaw_deviation(state: State):
     """ It penalizes the large joint angle of the waist yaw. """
