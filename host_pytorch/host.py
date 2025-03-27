@@ -227,26 +227,38 @@ def reward_joint_vel_limits(state: State):
 
 def reward_base_angular_velocity(state: State):
     """ It encourages low angular velocity of robot base after standing up. """
+
+    is_past_stage2 = state.height_base > state.height_stage2_thres
     raise NotImplementedError
 
 def reward_base_linear_velocity(state: State):
     """ It encourages low linear velocity of robot base after standing up. """
+
+    is_past_stage2 = state.height_base > state.height_stage2_thres
     raise NotImplementedError
 
 def reward_base_orientation(state: State):
     """ It encourages the robot base to be perpendicular to the ground. """
+
+    is_past_stage2 = state.height_base > state.height_stage2_thres
     raise NotImplementedError
 
 def reward_base_height(state: State):
     """ It encourages the robot base to reach a target height. """
+
+    is_past_stage2 = state.height_base > state.height_stage2_thres
     raise NotImplementedError
 
 def reward_upper_body_posture(state: State):
     """ It encourages the robot to track a target upper body postures. """
+
+    is_past_stage2 = state.height_base > state.height_stage2_thres
     raise NotImplementedError
 
 def reward_feet_parallel(state: State):
     """ In encourages the feet to be parallel to each other. """
+
+    is_past_stage2 = state.height_base > state.height_stage2_thres
     raise NotImplementedError
 
 # reward config with all the weights
