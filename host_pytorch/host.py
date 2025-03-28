@@ -2,7 +2,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
-from torch import tensor, stack
+from torch import nn
+from torch import tensor, cat, stack
 import torch.nn.functional as F
 from torch.nn import Module, ModuleList, Linear
 
@@ -10,7 +11,7 @@ from hl_gauss_pytorch import HLGaussLoss
 
 import einx
 from einops import repeat, rearrange, reduce
-from einops.layers.torch import EinMix as Mix
+from einops.layers.torch import Rearrange, Reduce, EinMix as Mix
 
 # constants
 
@@ -23,6 +24,9 @@ def exists(v):
 
 def default(v, d):
     return v if exists(v) else d
+
+def divisible_by(num, den):
+    return (num % den) == 0
 
 # sampling related
 
@@ -84,6 +88,7 @@ class State:
     right_feet_height: Float['']
     left_shank_angle: Float['']
     right_shank_angle: Float['']
+    past_actor_actions: Int['na d']
     upper_body_posture: Float['d']
     upper_body_posture_target: Float['d']
     height_base: Float['']
@@ -191,20 +196,30 @@ def reward_base_angular_velocity(state: State):
 def reward_joint_acceleration(state: State):
     """ It penalizes the high joint accelrations. """
 
-    return state.joint_acceleration.norm(dim = -1).pow(2)
+    return state.joint_acceleration.norm().pow(2)
 
 def reward_action_rate(state: State):
     """ It penalizes the high changing speed of action. """
-    raise NotImplementedError
+
+    if len(state.past_actor_actions) == 1:
+        return tensor(0.)
+
+    prev_action, curr_action = state.past_actor_actions[-2:]
+    return (prev_action - curr_action).norm().pow(2)
 
 def reward_smoothness(state: State):
     """ It penalizes the discrepancy between consecutive actions. """
-    raise NotImplementedError
+
+    if len(state.past_actor_actions) <= 2:
+        return tensor(0.)
+
+    prev_prev_action, prev_action, curr_action = state.past_actor_actions[-3:]
+    return (curr_action - 2 * prev_action + prev_prev_action).norm().pow(2)
 
 def reward_torques(state: State):
     """ It penalizes the high joint torques. """
 
-    raise state.joint_torque.norm(dim = -1).pow(2)
+    raise state.joint_torque.norm().pow(2)
 
 def reward_joint_power(state: State, *, T = 1.): # not sure what T is
     """ It penalizes the high joint power """
@@ -215,7 +230,7 @@ def reward_joint_power(state: State, *, T = 1.): # not sure what T is
 def reward_joint_velocity(state: State):
     """ It penalizes the high joint velocity. """
 
-    return state.joint_velocity.norm(dim = -1).pow(2)
+    return state.joint_velocity.norm().pow(2)
 
 def reward_joint_tracking_error(state: State):
     """ It penalizes the error between PD target (Eq. (1)) and actual joint position. """
@@ -261,7 +276,7 @@ def reward_upper_body_posture(state: State):
 
     is_past_stage2 = state.height_base > state.height_stage2_thres
 
-    return is_past_stage2 * (state.upper_body_posture - state.upper_body_posture_target).norm(dim = -1).mul(-1.).pow(2)
+    return is_past_stage2 * (state.upper_body_posture - state.upper_body_posture_target).norm().mul(-1.).pow(2)
 
 def reward_feet_parallel(state: State, *, feet_parallel_min_height_diff = 0.02):
     """ In encourages the feet to be parallel to each other. """
@@ -400,10 +415,31 @@ class Actor(Module):
         dims: tuple[int, ...] = (512, 256, 128),
         eps_clip = 0.2,
         beta_s = .01,
+        dim_action_embed = 4,
+        past_action_conv_kernel = 3,
     ):
         super().__init__()
+        assert not divisible_by(past_action_conv_kernel, 2)
 
-        dims = (*dims, num_actions)
+        first_state_dim, *dims = dims
+
+        # embedding past actions + a simple depthwise conv, to account for action rate / action smoothness rewards
+
+        self.past_actions_net = nn.Sequential(
+            nn.Embedding(num_actions, dim_action_embed),
+            Rearrange('b na da -> b da na'),
+            nn.Conv1d(dim_action_embed, dim_action_embed, past_action_conv_kernel, padding = past_action_conv_kernel // 2),
+            nn.ReLU(),
+            Reduce('b da na -> b da', 'sum')
+        )
+
+        self.null_action_embed = nn.Parameter(torch.zeros(dim_action_embed))
+
+        # backbone mlp
+
+        first_state_dim += dim_action_embed
+
+        dims = (first_state_dim, *dims, num_actions)
 
         self.net = MLP(*dims)
 
@@ -412,15 +448,34 @@ class Actor(Module):
         self.eps_clip = eps_clip
         self.beta_s = beta_s
 
+    def forward_net(
+        self,
+        state,
+        past_actions: Int['b na'] | None = None
+    ):
+        batch = state.shape[0]
+
+        if exists(past_actions):
+            action_embed = self.past_actions_net(past_actions)
+        else:
+            action_embed = repeat(self.null_action_embed, 'da -> b da', b = batch)
+
+        state = cat((state, action_embed), dim = -1)
+
+        logits = self.net(state)
+        return logits
+
     def forward_for_loss(
         self,
         state,
         actions,
         old_log_probs,
-        advantages
+        advantages,
+        past_actions: Int['b na'] | None = None
     ):
         clip = self.eps_clip
-        logits = self.net(state)
+
+        logits = self.forward_net(state, past_actions)
 
         prob = logits.softmax(dim = -1)
 
@@ -441,11 +496,12 @@ class Actor(Module):
     def forward(
         self,
         state,
+        past_actions: Int['b na'] | None = None,
         sample = False,
         sample_return_log_prob = True
     ):
 
-        logits = self.net(state)
+        logits = self.forward_net(state, past_actions)
 
         if not sample:
             prob = logits.softmax(dim = -1)
