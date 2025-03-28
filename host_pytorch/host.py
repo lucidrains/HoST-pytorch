@@ -78,6 +78,8 @@ class State:
     joint_torque: Float['d']
     left_ankle_keypoint_z: Float['d']
     right_ankle_keypoint_z: Float['d']
+    left_feet_height: Float['']
+    right_feet_height: Float['']
     left_shank_angle: Float['']
     right_shank_angle: Float['']
     height_base: Float['']
@@ -255,11 +257,12 @@ def reward_upper_body_posture(state: State):
     is_past_stage2 = state.height_base > state.height_stage2_thres
     raise NotImplementedError
 
-def reward_feet_parallel(state: State):
+def reward_feet_parallel(state: State, *, feet_parallel_min_height_diff = 0.02):
     """ In encourages the feet to be parallel to each other. """
 
     is_past_stage2 = state.height_base > state.height_stage2_thres
-    raise NotImplementedError
+
+    return torch.exp(-20 * (state.left_feet_height - state.right_feet_height).abs().clamp(min = feet_parallel_min_height_diff))
 
 # reward config with all the weights
 
