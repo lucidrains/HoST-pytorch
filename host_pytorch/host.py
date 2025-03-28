@@ -84,6 +84,8 @@ class State:
     right_feet_height: Float['']
     left_shank_angle: Float['']
     right_shank_angle: Float['']
+    upper_body_posture: Float['d']
+    upper_body_posture_target: Float['d']
     height_base: Float['']
     height_stage1_thres: Float['']  # they divide standing up into 2 phases, by whether the height_base reaches thresholds of stage 1 and stage2
     height_stage2_thres: Float['']
@@ -189,7 +191,7 @@ def reward_base_angular_velocity(state: State):
 def reward_joint_acceleration(state: State):
     """ It penalizes the high joint accelrations. """
 
-    return state.joint_acceleration.norm(dim = -1) ** 2
+    return state.joint_acceleration.norm(dim = -1).pow(2)
 
 def reward_action_rate(state: State):
     """ It penalizes the high changing speed of action. """
@@ -202,7 +204,7 @@ def reward_smoothness(state: State):
 def reward_torques(state: State):
     """ It penalizes the high joint torques. """
 
-    raise state.joint_torque.norm(dim = -1) ** 2
+    raise state.joint_torque.norm(dim = -1).pow(2)
 
 def reward_joint_power(state: State, *, T = 1.): # not sure what T is
     """ It penalizes the high joint power """
@@ -213,7 +215,7 @@ def reward_joint_power(state: State, *, T = 1.): # not sure what T is
 def reward_joint_velocity(state: State):
     """ It penalizes the high joint velocity. """
 
-    return state.joint_velocity.norm(dim = -1) ** 2
+    return state.joint_velocity.norm(dim = -1).pow(2)
 
 def reward_joint_tracking_error(state: State):
     """ It penalizes the error between PD target (Eq. (1)) and actual joint position. """
@@ -258,14 +260,15 @@ def reward_upper_body_posture(state: State):
     """ It encourages the robot to track a target upper body postures. """
 
     is_past_stage2 = state.height_base > state.height_stage2_thres
-    raise NotImplementedError
+
+    return is_past_stage2 * (state.upper_body_posture - state.upper_body_posture_target).norm(dim = -1).mul(-1.).pow(2)
 
 def reward_feet_parallel(state: State, *, feet_parallel_min_height_diff = 0.02):
     """ In encourages the feet to be parallel to each other. """
 
     is_past_stage2 = state.height_base > state.height_stage2_thres
 
-    return torch.exp(-20 * (state.left_feet_height - state.right_feet_height).abs().clamp(min = feet_parallel_min_height_diff))
+    return is_past_stage2 * (state.left_feet_height - state.right_feet_height).abs().clamp(min = feet_parallel_min_height_diff).mul(-20.)
 
 # reward config with all the weights
 
