@@ -76,6 +76,8 @@ class State:
     joint_velocity: Float['d']
     joint_acceleration: Float['d']
     joint_torque: Float['d']
+    joint_position: Float['d']
+    joint_position_PD_target: Float['d']
     left_ankle_keypoint_z: Float['d']
     right_ankle_keypoint_z: Float['d']
     left_feet_height: Float['']
@@ -215,7 +217,8 @@ def reward_joint_velocity(state: State):
 
 def reward_joint_tracking_error(state: State):
     """ It penalizes the error between PD target (Eq. (1)) and actual joint position. """
-    raise NotImplementedError
+
+    return (state.joint_position - state.joint_position_PD_target).norm(dim = -1) ** 2
 
 def reward_joint_pos_limits(state: State):
     """ It penalizes the joint position that beyond limits. """
