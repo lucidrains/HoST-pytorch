@@ -104,6 +104,7 @@ class HyperParams:
     ankle_parallel_thres: float = 0.05
     joint_power_T: float = 1.
     feet_parallel_min_height_diff: float = 0.02
+    feet_distance_thres: float = 0.9
 
 # the f_tol function in the paper
 
@@ -179,7 +180,8 @@ def reward_ankle_parallel(state: State, hparam: HyperParams):
 
 def reward_foot_distance(state: State, hparam: HyperParams):
     """ It penalizes a far distance between feet. """
-    raise NotImplementedError
+
+    return (state.left_feet_pos - state.right_feet_pos).norm().pow(2) > hparam.feet_distance_thres
 
 def reward_foot_stumble(state: State, hparam: HyperParams):
     """ It penalizes a horizontal contact force with the environment. """
