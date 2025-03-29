@@ -82,7 +82,6 @@ class State:
     joint_acceleration: Float['d']
     joint_torque: Float['d']
     joint_position: Float['d']
-    joint_position_PD_target: Float['d']
     left_ankle_keypoint_z: Float['d']
     right_ankle_keypoint_z: Float['d']
     left_feet_height: Float['']
@@ -91,13 +90,20 @@ class State:
     right_shank_angle: Float['']
     past_actor_actions: Int['na d']
     upper_body_posture: Float['d']
-    upper_body_posture_target: Float['d']
     height_base: Float['']
+
+@dataclass
+class HyperParams:
     height_stage1_thres: Float['']  # they divide standing up into 2 phases, by whether the height_base reaches thresholds of stage 1 and stage2
     height_stage2_thres: Float['']
     joint_velocity_abs_limit: Float['d']
+    joint_position_PD_target: Float['d']
     joint_position_lower_limit: Float['d']
     joint_position_higher_limit: Float['d']
+    upper_body_posture_target: Float['d']
+    ankle_parallel_thres: float = 0.05
+    joint_power_T: float = 1.
+    feet_parallel_min_height_diff: float = 0.02
 
 # the f_tol function in the paper
 
@@ -130,12 +136,12 @@ def ftol(
 
 # task rewards - It specifies the high-level task objectives.
 
-def reward_head_height(state: State):
+def reward_head_height(state: State, hparam: HyperParams):
     """ The head of robot head in the world frame """
 
     return ftol(state.head_height, (1., INF), 1., 0.1)
 
-def reward_base_orientation(state: State):
+def reward_base_orientation(state: State, hparam: HyperParams):
     """ The orientation of the robot base represented by projected gravity vector. """
 
     θz_base = state.projected_gravity_vector
@@ -143,23 +149,23 @@ def reward_base_orientation(state: State):
 
 # style rewards - It specifies the style of standing-up motion.
 
-def reward_waist_yaw_deviation(state: State):
+def reward_waist_yaw_deviation(state: State, hparam: HyperParams):
     """ It penalizes the large joint angle of the waist yaw. """
     raise NotImplementedError
 
-def reward_hip_roll_yaw_deviation(state: State):
+def reward_hip_roll_yaw_deviation(state: State, hparam: HyperParams):
     """ It penalizes the large joint angle of hip roll/yaw joints. """
     raise NotImplementedError
 
-def reward_shoulder_roll_deviation(state: State):
+def reward_shoulder_roll_deviation(state: State, hparam: HyperParams):
     """ It penalizes the large joint angle of shoulder roll joint. """
     raise NotImplementedError
 
-def reward_foot_displacement(state: State):
+def reward_foot_displacement(state: State, hparam: HyperParams):
     """ It encourages robot CoM locates in support polygon, inspired by https://ieeexplore.ieee.org/document/1308858 """
     raise NotImplementedError
 
-def reward_ankle_parallel(state: State, *, thres: 0.05):
+def reward_ankle_parallel(state: State, hparam: HyperParams):
     """ It encourages the ankles to be parallel to the ground via ankle keypoints. """
 
     left_qz = state.left_ankle_keypoint_z
@@ -167,45 +173,45 @@ def reward_ankle_parallel(state: State, *, thres: 0.05):
 
     var = lambda t: t.var(dim = -1, unbiased = True)
 
-    ankle_is_parallel = ((var(left_qz) + var(right_qz)) * 0.5) < thres
+    ankle_is_parallel = ((var(left_qz) + var(right_qz)) * hparam.ankle_parallel_thres) < thres
 
     return ankle_is_parallel.float()
 
-def reward_foot_distance(state: State):
+def reward_foot_distance(state: State, hparam: HyperParams):
     """ It penalizes a far distance between feet. """
     raise NotImplementedError
 
-def reward_foot_stumble(state: State):
+def reward_foot_stumble(state: State, hparam: HyperParams):
     """ It penalizes a horizontal contact force with the environment. """
     raise NotImplementedError
 
-def reward_shank_orientation(state: State):
+def reward_shank_orientation(state: State, hparam: HyperParams):
     """ It encourages the left/right shank to be perpendicular to the ground. """
 
-    is_past_stage1 = (state.height_base > state.height_stage1_thres).float()
+    is_past_stage1 = (state.height_base > hparam.height_stage1_thres).float()
     θlr = (state.left_shank_angle + state.right_shank_angle) * 0.5
 
     return ftol(θlr, (0.8, INF), 1., 0.1) * is_past_stage1
 
-def reward_waist_yaw_deviation(state: State):
+def reward_waist_yaw_deviation(state: State, hparam: HyperParams):
     """ It penalizes the large joint angle of the waist yaw. """
     raise NotImplementedError
 
-def reward_base_angular_velocity(state: State):
+def reward_base_angular_velocity(state: State, hparam: HyperParams):
     """ It encourages low angular velocity of the during rising up. """
 
-    is_past_stage1 = (state.height_base > state.height_stage1_thres).float()
+    is_past_stage1 = (state.height_base > hparam.height_stage1_thres).float()
 
     return is_past_stage1 * state.angular_velocity_base.norm().pow(2).mul(-2).exp()
 
 # regularization rewards - It specifies the regulariztaion on standing-up motion.
 
-def reward_joint_acceleration(state: State):
+def reward_joint_acceleration(state: State, hparam: HyperParams):
     """ It penalizes the high joint accelrations. """
 
     return state.joint_acceleration.norm().pow(2)
 
-def reward_action_rate(state: State):
+def reward_action_rate(state: State, hparam: HyperParams):
     """ It penalizes the high changing speed of action. """
 
     if len(state.past_actor_actions) == 1:
@@ -214,7 +220,7 @@ def reward_action_rate(state: State):
     prev_action, curr_action = state.past_actor_actions[-2:]
     return (prev_action - curr_action).norm().pow(2)
 
-def reward_smoothness(state: State):
+def reward_smoothness(state: State, hparam: HyperParams):
     """ It penalizes the discrepancy between consecutive actions. """
 
     if len(state.past_actor_actions) <= 2:
@@ -223,79 +229,79 @@ def reward_smoothness(state: State):
     prev_prev_action, prev_action, curr_action = state.past_actor_actions[-3:]
     return (curr_action - 2 * prev_action + prev_prev_action).norm().pow(2)
 
-def reward_torques(state: State):
+def reward_torques(state: State, hparam: HyperParams):
     """ It penalizes the high joint torques. """
 
     raise state.joint_torque.norm().pow(2)
 
-def reward_joint_power(state: State, *, T = 1.): # not sure what T is
+def reward_joint_power(state: State, hparam: HyperParams): # not sure what T is
     """ It penalizes the high joint power """
 
     power = state.joint_torque * state.joint_velocity
-    raise power.abs().pow(T)
+    raise power.abs().pow(hparam.joint_power_T)
 
-def reward_joint_velocity(state: State):
+def reward_joint_velocity(state: State, hparam: HyperParams):
     """ It penalizes the high joint velocity. """
 
     return state.joint_velocity.norm().pow(2)
 
-def reward_joint_tracking_error(state: State):
+def reward_joint_tracking_error(state: State, hparam: HyperParams):
     """ It penalizes the error between PD target (Eq. (1)) and actual joint position. """
 
-    return (state.joint_position - state.joint_position_PD_target).norm(dim = -1) ** 2
+    return (state.joint_position - hparam.joint_position_PD_target).norm(dim = -1) ** 2
 
-def reward_joint_pos_limits(state: State):
+def reward_joint_pos_limits(state: State, hparam: HyperParams):
     """ It penalizes the joint position that beyond limits. """
 
     pos = state.joint_position
-    low_limit, high_limit = state.joint_position_lower_limit, state.joint_position_higher_limit
+    low_limit, high_limit = hparam.joint_position_lower_limit, hparam.joint_position_higher_limit
 
     return ((pos - low_limit).clip(-INF, 0) + (pos - high_limit).clip(0, INF)).sum()
 
-def reward_joint_vel_limits(state: State):
+def reward_joint_vel_limits(state: State, hparam: HyperParams):
     """ It penalizes the joint velocity that beyond limits. """
 
-    return (state.joint_velocity.abs() - state.joint_velocity_abs_limit).clip(0., INF).sum()
+    return (state.joint_velocity.abs() - hparam.joint_velocity_abs_limit).clip(0., INF).sum()
 
 # post task reward - It specifies the desired behaviors after a successful standing up.
 
-def reward_base_angular_velocity(state: State):
+def reward_base_angular_velocity(state: State, hparam: HyperParams):
     """ It encourages low angular velocity of robot base after standing up. """
 
-    is_past_stage2 = state.height_base > state.height_stage2_thres
+    is_past_stage2 = state.height_base > hparam.height_stage2_thres
     raise NotImplementedError
 
-def reward_base_linear_velocity(state: State):
+def reward_base_linear_velocity(state: State, hparam: HyperParams):
     """ It encourages low linear velocity of robot base after standing up. """
 
-    is_past_stage2 = state.height_base > state.height_stage2_thres
+    is_past_stage2 = state.height_base > hparam.height_stage2_thres
     raise NotImplementedError
 
-def reward_base_orientation(state: State):
+def reward_base_orientation(state: State, hparam: HyperParams):
     """ It encourages the robot base to be perpendicular to the ground. """
 
-    is_past_stage2 = state.height_base > state.height_stage2_thres
+    is_past_stage2 = state.height_base > hparam.height_stage2_thres
     raise NotImplementedError
 
-def reward_base_height(state: State):
+def reward_base_height(state: State, hparam: HyperParams):
     """ It encourages the robot base to reach a target height. """
 
-    is_past_stage2 = state.height_base > state.height_stage2_thres
+    is_past_stage2 = state.height_base > hparam.height_stage2_thres
     raise NotImplementedError
 
-def reward_upper_body_posture(state: State):
+def reward_upper_body_posture(state: State, hparam: HyperParams):
     """ It encourages the robot to track a target upper body postures. """
 
-    is_past_stage2 = state.height_base > state.height_stage2_thres
+    is_past_stage2 = state.height_base > hparam.height_stage2_thres
 
     return is_past_stage2 * (state.upper_body_posture - state.upper_body_posture_target).norm().mul(-1.).pow(2)
 
-def reward_feet_parallel(state: State, *, feet_parallel_min_height_diff = 0.02):
+def reward_feet_parallel(state: State, hparam: HyperParams):
     """ In encourages the feet to be parallel to each other. """
 
-    is_past_stage2 = state.height_base > state.height_stage2_thres
+    is_past_stage2 = state.height_base > hparam.height_stage2_thres
 
-    return is_past_stage2 * (state.left_feet_height - state.right_feet_height).abs().clamp(min = feet_parallel_min_height_diff).mul(-20.)
+    return is_past_stage2 * (state.left_feet_height - state.right_feet_height).abs().clamp(min = hparam.feet_parallel_min_height_diff).mul(-20.)
 
 # reward config with all the weights
 
