@@ -94,6 +94,9 @@ class State:
     height_base: Float['']
     height_stage1_thres: Float['']  # they divide standing up into 2 phases, by whether the height_base reaches thresholds of stage 1 and stage2
     height_stage2_thres: Float['']
+    joint_velocity_abs_limit: Float['d']
+    joint_position_lower_limit: Float['d']
+    joint_position_higher_limit: Float['d']
 
 # the f_tol function in the paper
 
@@ -239,11 +242,16 @@ def reward_joint_tracking_error(state: State):
 
 def reward_joint_pos_limits(state: State):
     """ It penalizes the joint position that beyond limits. """
-    raise NotImplementedError
+
+    pos = state.joint_position
+    low_limit, high_limit = state.joint_position_lower_limit, state.joint_position_higher_limit
+
+    return ((pos - low_limit).clip(-INF, 0) + (pos - high_limit).clip(0, INF)).sum()
 
 def reward_joint_vel_limits(state: State):
     """ It penalizes the joint velocity that beyond limits. """
-    raise NotImplementedError
+
+    return (state.joint_velocity.abs() - state.joint_velocity_abs_limit).clip(0., INF).sum()
 
 # post task reward - It specifies the desired behaviors after a successful standing up.
 
