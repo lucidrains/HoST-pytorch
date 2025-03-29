@@ -76,6 +76,7 @@ def calc_gae(
 @dataclass
 class State:
     head_height: Float['']
+    angular_velocity_base: Float['d']
     projected_gravity_vector: Float[''] # orientation of robot base
     joint_velocity: Float['d']
     joint_acceleration: Float['d']
@@ -192,7 +193,10 @@ def reward_waist_yaw_deviation(state: State):
 
 def reward_base_angular_velocity(state: State):
     """ It encourages low angular velocity of the during rising up. """
-    raise NotImplementedError
+
+    is_past_stage1 = (state.height_base > state.height_stage1_thres).float()
+
+    return is_past_stage1 * state.angular_velocity_base.norm().pow(2).mul(-2).exp()
 
 # regularization rewards - It specifies the regulariztaion on standing-up motion.
 
