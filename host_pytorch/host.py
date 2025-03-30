@@ -93,6 +93,7 @@ class State:
     past_actor_actions: Int['na d']
     upper_body_posture: Float['d']
     height_base: Float['']
+    contact_force: Float['xyz']
 
 @dataclass
 class HyperParams:
@@ -108,6 +109,7 @@ class HyperParams:
     feet_parallel_min_height_diff: float = 0.02
     feet_distance_thres: float = 0.9
     waist_yaw_joint_angle_thres: float = 1.4
+    contact_force_ratio_is_foot_stumble: float = 3.
 
 # the f_tol function in the paper
 
@@ -189,7 +191,10 @@ def reward_foot_distance(state: State, hparam: HyperParams):
 
 def reward_foot_stumble(state: State, hparam: HyperParams):
     """ It penalizes a horizontal contact force with the environment. """
-    raise NotImplementedError
+
+    Fxy, Fz = state.contact_force[:-2], state.contact_force[-1]
+
+    return (Fxy > hparam.contact_force_ratio_is_foot_stumble * Fz).any().float()
 
 def reward_shank_orientation(state: State, hparam: HyperParams):
     """ It encourages the left/right shank to be perpendicular to the ground. """
