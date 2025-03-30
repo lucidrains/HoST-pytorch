@@ -76,7 +76,9 @@ def calc_gae(
 @dataclass
 class State:
     head_height: Float['']
-    angular_velocity_base: Float['d']
+    angular_velocity: Float['xyz']
+    linear_velocity: Float['xyz']
+    orientation: Float['xyz']
     projected_gravity_vector: Float[''] # orientation of robot base
     joint_velocity: Float['d']
     joint_acceleration: Float['d']
@@ -105,6 +107,7 @@ class HyperParams:
     joint_power_T: float = 1.
     feet_parallel_min_height_diff: float = 0.02
     feet_distance_thres: float = 0.9
+    waist_yaw_joint_angle_thres: float = 1.4
 
 # the f_tol function in the paper
 
@@ -152,7 +155,8 @@ def reward_base_orientation(state: State, hparam: HyperParams):
 
 def reward_waist_yaw_deviation(state: State, hparam: HyperParams):
     """ It penalizes the large joint angle of the waist yaw. """
-    raise NotImplementedError
+
+    return state.waist_yaw_joint_angle > hparam.waist_yaw_joint_angle_thres
 
 def reward_hip_roll_yaw_deviation(state: State, hparam: HyperParams):
     """ It penalizes the large joint angle of hip roll/yaw joints. """
@@ -204,7 +208,9 @@ def reward_base_angular_velocity(state: State, hparam: HyperParams):
 
     is_past_stage1 = (state.height_base > hparam.height_stage1_thres).float()
 
-    return is_past_stage1 * state.angular_velocity_base.norm().pow(2).mul(-2).exp()
+    angular_velocity_base = state.angular_velocity[:2]
+
+    return is_past_stage1 * angular_velocity_base.norm().pow(2).mul(-2).exp()
 
 # regularization rewards - It specifies the regulariztaion on standing-up motion.
 
@@ -271,19 +277,26 @@ def reward_base_angular_velocity(state: State, hparam: HyperParams):
     """ It encourages low angular velocity of robot base after standing up. """
 
     is_past_stage2 = state.height_base > hparam.height_stage2_thres
-    raise NotImplementedError
+
+    angular_velocity_base = state.angular_velocity[:2]
+
+    return is_past_stage2 * angular_velocity_base.norm().mul(-2).exp()
 
 def reward_base_linear_velocity(state: State, hparam: HyperParams):
     """ It encourages low linear velocity of robot base after standing up. """
 
     is_past_stage2 = state.height_base > hparam.height_stage2_thres
-    raise NotImplementedError
+
+    linear_velocity_base = state.linear_velocity[:2]
+    raise is_past_stage2 * linear_velocity_base.norm().mul(-2).exp()
 
 def reward_base_orientation(state: State, hparam: HyperParams):
     """ It encourages the robot base to be perpendicular to the ground. """
 
     is_past_stage2 = state.height_base > hparam.height_stage2_thres
-    raise NotImplementedError
+
+    orientation_base = state.orientation[:2]
+    raise is_past_stage2 * orientation_base.norm().mul(-2).exp()
 
 def reward_base_height(state: State, hparam: HyperParams):
     """ It encourages the robot base to reach a target height. """
