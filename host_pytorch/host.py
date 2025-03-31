@@ -13,6 +13,8 @@ import einx
 from einops import repeat, rearrange, reduce
 from einops.layers.torch import Rearrange, Reduce, EinMix as Mix
 
+from HoST_pytorch.associative_scan import AssocScan
+
 # constants
 
 INF = float('inf')
@@ -51,25 +53,41 @@ def get_log_prob(t, indices, is_prob = False):
 
 # generalized advantage estimate
 
-def calc_gae(
+def calc_target_and_gae(
     rewards,
     values,
     masks,
     gamma = 0.99,
-    lam = 0.95
-):
+    lam = 0.95,
+    use_accelerated = None
 
+):
+    assert rewards.shape[-1] == (values.shape[-1] + 1)
+
+    use_accelerated = default(use_accelerated, rewards.is_cuda)
     device = rewards.device
 
-    gae = 0.
-    returns = torch.empty_like(rewards)
+    rewards, inverse_pack = pack_one(rewards, '* n')
+    values, _ = pack_one(values, '* n')
+    masks, _ = pack_one(masks, '* n')
 
-    for i in reversed(range(len(rewards))):
-        delta = rewards[i] + gamma * values[i + 1] * masks[i] - values[i]
-        gae = delta + gamma * lam * masks[i] * gae
-        returns[i] = gae + values[i]
+    values, values_next = values[:, :-1], values[:, 1:]
 
-    return returns
+    delta = rewards + gamma * values_next * masks - values
+    gates = gamma * lam * masks
+
+    gates, delta = gates[..., :, None], delta[..., :, None]
+
+    scan = AssocScan(reverse = True, use_accelerated = use_accelerated)
+    gae = scan(gates, delta)
+
+    gae = gae[..., :, 0]
+
+    returns = gae + values
+
+    gae, returns = tuple(inverse_pack(t) for t in (gae, returns))
+
+    return returns, gae
 
 # === reward functions === table 6 - they have a mistake where they redefine ankle parallel reward twice
 
