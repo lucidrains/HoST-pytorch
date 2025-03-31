@@ -104,6 +104,7 @@ class HyperParams:
     joint_position_lower_limit: Float['d']
     joint_position_higher_limit: Float['d']
     upper_body_posture_target: Float['d']
+    height_base_target: Float['']
     ankle_parallel_thres: float = 0.05
     joint_power_T: float = 1.
     feet_parallel_min_height_diff: float = 0.02
@@ -307,7 +308,8 @@ def reward_base_height(state: State, hparam: HyperParams):
     """ It encourages the robot base to reach a target height. """
 
     is_past_stage2 = state.height_base > hparam.height_stage2_thres
-    raise NotImplementedError
+
+    return is_past_stage2 * (state.height_base - state.height_base_target).norm().pow(2).mul(-20).exp()
 
 def reward_upper_body_posture(state: State, hparam: HyperParams):
     """ It encourages the robot to track a target upper body postures. """
