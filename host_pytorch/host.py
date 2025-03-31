@@ -205,10 +205,6 @@ def reward_shank_orientation(state: State, hparam: HyperParams):
 
     return ftol(θlr, (0.8, INF), 1., 0.1) * is_past_stage1
 
-def reward_waist_yaw_deviation(state: State, hparam: HyperParams):
-    """ It penalizes the large joint angle of the waist yaw. """
-    raise NotImplementedError
-
 def reward_base_angular_velocity(state: State, hparam: HyperParams):
     """ It encourages low angular velocity of the during rising up. """
 
