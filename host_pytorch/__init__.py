@@ -1,4 +1,4 @@
-from HoST_pytorch.host import (
+from host_pytorch.host import (
     Actor,
     Critics,
     GroupedMLP,

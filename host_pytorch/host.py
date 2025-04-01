@@ -13,7 +13,7 @@ import einx
 from einops import repeat, rearrange, reduce
 from einops.layers.torch import Rearrange, Reduce, EinMix as Mix
 
-from HoST_pytorch.associative_scan import AssocScan
+from host_pytorch.associative_scan import AssocScan
 
 # constants
 
@@ -112,6 +112,7 @@ class State:
     upper_body_posture: Float['d']
     height_base: Float['']
     contact_force: Float['xyz']
+    hip_joint_angle_lr: Float['']
 
 @dataclass
 class HyperParams:
@@ -129,6 +130,8 @@ class HyperParams:
     feet_distance_thres: float = 0.9
     waist_yaw_joint_angle_thres: float = 1.4
     contact_force_ratio_is_foot_stumble: float = 3.
+    max_hip_joint_angle_lr: float = 1.4
+    min_hip_joint_angle_lr: float = 0.9
 
 # the f_tol function in the paper
 
@@ -181,7 +184,13 @@ def reward_waist_yaw_deviation(state: State, hparam: HyperParams):
 
 def reward_hip_roll_yaw_deviation(state: State, hparam: HyperParams):
     """ It penalizes the large joint angle of hip roll/yaw joints. """
-    raise NotImplementedError
+
+    hip_joint_angle_lr = state.hip_joint_angle_lr.abs() # may not be absolute operator.. todo: figure out what | means in the paper
+
+    return (
+        (hip_joint_angle_lr.amax() > hparam.max_hip_joint_angle_lr) |
+        (hip_joint_angle_lr.amin() < hparam.min_hip_joint_angle_lr)
+    )
 
 def reward_shoulder_roll_deviation(state: State, hparam: HyperParams):
     """ It penalizes the large joint angle of shoulder roll joint. """
