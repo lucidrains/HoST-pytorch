@@ -113,6 +113,8 @@ class State:
     height_base: Float['']
     contact_force: Float['xyz']
     hip_joint_angle_lr: Float['']
+    robot_base_angle_q: Float['xyz']
+    feet_angle_q: Float['xyz']
 
 @dataclass
 class HyperParams:
@@ -198,6 +200,14 @@ def reward_shoulder_roll_deviation(state: State, hparam: HyperParams):
 
 def reward_foot_displacement(state: State, hparam: HyperParams):
     """ It encourages robot CoM locates in support polygon, inspired by https://ieeexplore.ieee.org/document/1308858 """
+
+    is_past_stage2 = state.height_base > hparam.height_stage2_thres
+
+    robot_base_angle_qxy = state.robot_base_angle_q[:2]
+    feet_angle_qxy = state.feet_angle_q[:2]
+
+    return is_past_stage2 * torch.exp((robot_base_angle_qxy - feet_angle_qxy).norm().pow(2).clamp(min = 0.3).mul(-2))
+
     raise NotImplementedError
 
 def reward_ankle_parallel(state: State, hparam: HyperParams):
