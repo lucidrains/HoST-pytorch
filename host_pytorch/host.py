@@ -208,8 +208,6 @@ def reward_foot_displacement(state: State, hparam: HyperParams):
 
     return is_past_stage2 * torch.exp((robot_base_angle_qxy - feet_angle_qxy).norm().pow(2).clamp(min = 0.3).mul(-2))
 
-    raise NotImplementedError
-
 def reward_ankle_parallel(state: State, hparam: HyperParams):
     """ It encourages the ankles to be parallel to the ground via ankle keypoints. """
 
