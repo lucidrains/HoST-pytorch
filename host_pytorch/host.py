@@ -115,6 +115,9 @@ class State:
     hip_joint_angle_lr: Float['']
     robot_base_angle_q: Float['xyz']
     feet_angle_q: Float['xyz']
+    knee_joint_angle_lr: Float['lr']
+    shoulder_joint_angle_l: Float['']
+    shoulder_joint_angle_r: Float['']
 
 @dataclass
 class HyperParams:
@@ -134,6 +137,8 @@ class HyperParams:
     contact_force_ratio_is_foot_stumble: float = 3.
     max_hip_joint_angle_lr: float = 1.4
     min_hip_joint_angle_lr: float = 0.9
+    knee_joint_angle_max_min: tuple[float, float] = (2.85, -0.06)
+    shoulder_joint_angle_max_min: tuple[float, float] = (-0.02, 0.02)
 
 # the f_tol function in the paper
 
@@ -194,9 +199,18 @@ def reward_hip_roll_yaw_deviation(state: State, hparam: HyperParams):
         (hip_joint_angle_lr.amin() < hparam.min_hip_joint_angle_lr)
     )
 
+def reward_knee_deviation(state: State, hparam: HyperParams):
+    """ It penalizes the large joint angle of the knee joints """
+
+    max_thres, min_thres = hparam.knee_joint_angle_max_min
+    return ((state.knee_joint_angle_lr.amax() > max_thres) | (state.knee_joint_angle_lr.amin() < min_thres)).any()
+
 def reward_shoulder_roll_deviation(state: State, hparam: HyperParams):
     """ It penalizes the large joint angle of shoulder roll joint. """
-    raise NotImplementedError
+
+    max_thres, min_thres = hparam.shoulder_joint_angle_max_min
+    max_value, min_value = state.shoulder_joint_angle_l.amax(), state.shoulder_joint_angle_r.amin()
+    return ((max_value < max_thres) | (min_value > min_thres)).any()
 
 def reward_foot_displacement(state: State, hparam: HyperParams):
     """ It encourages robot CoM locates in support polygon, inspired by https://ieeexplore.ieee.org/document/1308858 """
