@@ -416,7 +416,8 @@ class RewardShapingWrapper(Module):
     def __init__(
         self,
         config = REWARD_CONFIG,
-        critics_kwargs: dict = dict()
+        critics_kwargs: dict = dict(),
+        reward_hparams: HyperParams | None = None
     ):
         super().__init__()
 
@@ -444,13 +445,22 @@ class RewardShapingWrapper(Module):
 
         self.reward_fns = [reward_fn for _, _, reward_group_fns in config for reward_fn, _ in reward_group_fns]
 
+        # default reward hyperparams, but can be overridden
+
+        self.reward_hparams = reward_hparams
+
     def forward(
         self,
-        state: State
+        state: State,
+        reward_hparams: HyperParams | None = None
     ):
         assert isinstance(state, State)
 
-        rewards = tensor([reward_fn(state) for reward_fn in self.reward_fns])
+        reward_hparams = default(reward_hparams, self.reward_hparams)
+
+        assert exists(reward_hparams)
+
+        rewards = tensor([reward_fn(state, reward_hparams) for reward_fn in self.reward_fns])
 
         weighted_rewards = rewards * self.reward_weights
 
@@ -699,30 +709,35 @@ class Agent(Module):
     def __init__(
         self,
         *,
-        actor: dict | Actor,
-        critics: dict | Critic,
+        actor: dict,
+        critics: dict,
         actor_lr = 1e-4,
         critics_lr = 1e-4,
         actor_optim_kwargs: dict = dict(),
         critics_optim_kwargs: dict = dict(),
-        optim_klass = Adam
+        optim_klass = Adam,
+        reward_config = REWARD_CONFIG
     ):
         super().__init__()
 
-        if isinstance(actor, dict):
-            actor = Actor(**actor)
+        actor = Actor(**actor)
 
-        if isinstance(critics, dict):
-            critics = Critics(**critics)
+        reward_shaper = RewardShapingWrapper(
+            reward_config,
+            critics_kwargs = critics
+        )
 
         self.actor = actor
-        self.critics = critics
+        self.critics = reward_shaper.critics
+        self.reward_shaper = reward_shaper
 
-        self.actor_optim = optim_klass(actor.parameters(), lr = actor_lr, **actor_optim_kwargs)
-        self.critics_optim = optim_klass(critics.parameters(), lr = critics_lr, **critics_optim_kwargs)
+        self.actor_optim = optim_klass(self.actor.parameters(), lr = actor_lr, **actor_optim_kwargs)
+        self.critics_optim = optim_klass(self.critics.parameters(), lr = critics_lr, **critics_optim_kwargs)
 
     def forward(
         self,
-        env: Iterable[State]
+        env: Iterable[State],
+        hparam: HyperParams | None = None
     ):
+
         raise NotImplementedError
