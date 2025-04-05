@@ -1,10 +1,12 @@
 from __future__ import annotations
+from typing import Iterable
 from dataclasses import dataclass
 
 import torch
 from torch import nn
-from torch import tensor, cat, stack
 import torch.nn.functional as F
+from torch.optim import Adam
+from torch import tensor, cat, stack
 from torch.nn import Module, ModuleList, Linear
 
 from hl_gauss_pytorch import HLGaussLoss
@@ -690,3 +692,37 @@ class Critics(Module):
             return values
 
         return F.mse_loss(rewards, values)
+
+# agent - consisting of actor and critic
+
+class Agent(Module):
+    def __init__(
+        self,
+        *,
+        actor: dict | Actor,
+        critics: dict | Critic,
+        actor_lr = 1e-4,
+        critics_lr = 1e-4,
+        actor_optim_kwargs: dict = dict(),
+        critics_optim_kwargs: dict = dict(),
+        optim_klass = Adam
+    ):
+        super().__init__()
+
+        if isinstance(actor, dict):
+            actor = Actor(**actor)
+
+        if isinstance(critics, dict):
+            critics = Critics(**critics)
+
+        self.actor = actor
+        self.critics = critics
+
+        self.actor_optim = optim_klass(actor.parameters(), lr = actor_lr, **actor_optim_kwargs)
+        self.critics_optim = optim_klass(critics.parameters(), lr = critics_lr, **critics_optim_kwargs)
+
+    def forward(
+        self,
+        env: Iterable[State]
+    ):
+        raise NotImplementedError
