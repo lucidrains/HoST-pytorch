@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Iterable
+from pathlib import Path
 from dataclasses import dataclass
 
 import torch
@@ -733,6 +734,49 @@ class Agent(Module):
 
         self.actor_optim = optim_klass(self.actor.parameters(), lr = actor_lr, **actor_optim_kwargs)
         self.critics_optim = optim_klass(self.critics.parameters(), lr = critics_lr, **critics_optim_kwargs)
+
+    def save(
+        self,
+        path: str | Path,
+        overwrite = False
+    ):
+        if isinstance(path, str):
+            path = Path(path)
+
+        assert overwrite or not path.exists(), f'{str(path)} already exists'
+
+        pkg = dict(
+            actor = self.actor.state_dict(),
+            critics = self.critics.state_dict(),
+            actor_optim = self.actor_optim.state_dict(),
+            critics_optim = self.critics_optim.state_dict(),
+        )
+
+        torch.save(pkg, str(path))
+
+    def load(
+        self,
+        path: str | Path,
+        load_optim = True
+    ):
+        if isinstance(path, str):
+            path = Path(path)
+
+        assert path.exists()
+
+        pkg = torch.load(str(path), weights_only = True)
+
+        self.actor.load_state_dict(pkg['actor'])
+        self.critics.load_state_dict(pkg['critics'])
+
+        if not load_optim:
+            return
+
+        if 'actor_optim' in pkg:
+            self.actor_optim.load_state_dict(pkg['actor_optim'])
+
+        if 'critics_optim' in pkg:
+            self.critics_optim.load_state_dict(pkg['critics_optim'])
 
     def forward(
         self,
