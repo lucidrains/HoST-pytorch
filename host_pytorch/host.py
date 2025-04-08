@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Iterable
 
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from collections import namedtuple
 
 import torch
@@ -15,7 +15,7 @@ from torch.nn import Module, ModuleList, Linear
 from hl_gauss_pytorch import HLGaussLoss
 
 import einx
-from einops import repeat, rearrange, reduce
+from einops import repeat, rearrange, reduce, pack
 from einops.layers.torch import Rearrange, Reduce, EinMix as Mix
 
 from host_pytorch.associative_scan import AssocScan
@@ -153,7 +153,7 @@ def state_to_tensor(
     state: State
 ) -> Float['state_dim']:
 
-    state_dict = state._as_dict()
+    state_dict = asdict(state)
 
     state_features, _ = pack([*state_dict.values()], '*')
 
@@ -539,6 +539,8 @@ class Actor(Module):
 
         # embedding past actions + a simple depthwise conv, to account for action rate / action smoothness rewards
 
+        self.num_actions = num_actions
+
         self.past_actions_net = nn.Sequential(
             nn.Embedding(num_actions, dim_action_embed),
             Rearrange('b na da -> b da na'),
@@ -608,11 +610,13 @@ class Actor(Module):
 
     def forward(
         self,
-        state,
+        state: Float['d'] | Float['b d'],
         past_actions: Int['b na'] | None = None,
         sample = False,
         sample_return_log_prob = True
     ):
+        if state.ndim == 1:
+            state = rearrange(state, 'd -> 1 d')
 
         logits = self.forward_net(state, past_actions)
 
@@ -679,32 +683,30 @@ class Critics(Module):
     def __init__(
         self,
         weights: tuple[float, ...],
-        num_actions = None,
+        *,
+        num_actions: int,
         dims: tuple[int, ...] = (512, 256),
         num_critics = 4,
+        dim_action_embed = 16,
+        past_action_conv_kernel = 3
     ):
         super().__init__()
 
         first_dim, *dims = dims
 
-        # critics can optionally see the past actions as well
+        # critics can see the past actions as well
 
-        self.past_actions_net = None
+        self.past_actions_net = nn.Sequential(
+            nn.Embedding(num_actions, dim_action_embed),
+            Rearrange('b na da -> b da na'),
+            nn.Conv1d(dim_action_embed, dim_action_embed, past_action_conv_kernel, padding = past_action_conv_kernel // 2),
+            nn.ReLU(),
+            Reduce('b da na -> b da', 'sum')
+        )
 
-        if exists(num_actions):
-            # embedding past actions + a simple depthwise conv, to account for action rate / action smoothness rewards
+        self.null_action_embed = nn.Parameter(torch.zeros(dim_action_embed))
 
-            self.past_actions_net = nn.Sequential(
-                nn.Embedding(num_actions, dim_action_embed),
-                Rearrange('b na da -> b da na'),
-                nn.Conv1d(dim_action_embed, dim_action_embed, past_action_conv_kernel, padding = past_action_conv_kernel // 2),
-                nn.ReLU(),
-                Reduce('b da na -> b da', 'sum')
-            )
-
-            self.null_action_embed = nn.Parameter(torch.zeros(dim_action_embed))
-
-            first_dim += dim_action_embed
+        first_dim += dim_action_embed
 
         # grouped mlp for the grouped critic scheme from boston university paper
 
@@ -733,16 +735,21 @@ class Critics(Module):
 
     def forward(
         self,
-        state,
+        state: Float['d'] | Float['b d'],
         rewards: Float['b g'] | None = None,
         past_actions: Int['b na'] | None = None,
     ):
+
+        if state.ndim == 1:
+            state = rearrange(state, 'd -> 1 d')
 
         if exists(past_actions):
             assert exists(self.past_actions_net)
             action_embed = self.past_actions_net(past_actions)
         else:
             action_embed = repeat(self.null_action_embed, 'da -> b da', b = state.shape[0])
+
+        state = cat((state, action_embed), dim = -1)
 
         values = self.mlps(state)
         values = rearrange(values, '... 1 -> ...')
@@ -786,7 +793,7 @@ class Agent(Module):
 
         reward_shaper = RewardShapingWrapper(
             reward_config,
-            critics_kwargs = critics
+            critics_kwargs = {**critics, 'num_actions': actor.num_actions}
         )
 
         self.actor = actor
@@ -862,10 +869,14 @@ class Agent(Module):
         for _ in range(self.num_episodes):
 
             timestep = 0
-
             state = env.reset()
 
             while timestep < self.max_episode_timesteps:
+
+                state_tensor = state_to_tensor(state)
+
+                actions = self.actor(state_tensor)
+                values = self.critics(state_tensor)
 
                 timestep += 1
 
