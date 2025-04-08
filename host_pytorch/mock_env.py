@@ -4,7 +4,10 @@ import torch
 from torch import tensor, randn, randint
 from torch.nn import Module
 
-from host_pytorch import State
+from host_pytorch.host import State
+from host_pytorch.tensor_typing import Int
+
+# functions
 
 def random_state():
     return State(
@@ -32,7 +35,6 @@ def random_state():
         knee_joint_angle_lr = randn((2,)),
         shoulder_joint_angle_l = randn(()),
         shoulder_joint_angle_r = randn(()),
-        past_actor_actions = randint(0, 1, (3, 2)),
     )
 
 # mock env
