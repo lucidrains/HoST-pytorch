@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Iterable
 from pathlib import Path
 from dataclasses import dataclass
+from collections import namedtuple
 
 import torch
 from torch import nn
@@ -17,6 +18,8 @@ from einops import repeat, rearrange, reduce
 from einops.layers.torch import Rearrange, Reduce, EinMix as Mix
 
 from host_pytorch.associative_scan import AssocScan
+
+from host_pytorch.tensor_typing import Float, Int, Bool
 
 # constants
 
@@ -111,7 +114,6 @@ class State:
     right_feet_height: Float['']
     left_shank_angle: Float['']
     right_shank_angle: Float['']
-    past_actor_actions: Int['na d']
     upper_body_posture: Float['d']
     height_base: Float['']
     contact_force: Float['xyz']
@@ -121,6 +123,7 @@ class State:
     knee_joint_angle_lr: Float['lr']
     shoulder_joint_angle_l: Float['']
     shoulder_joint_angle_r: Float['']
+    past_actor_actions: Int['t na'] # only non float exception
 
 @dataclass
 class HyperParams:
@@ -142,6 +145,23 @@ class HyperParams:
     min_hip_joint_angle_lr: float = 0.9
     knee_joint_angle_max_min: tuple[float, float] = (2.85, -0.06)
     shoulder_joint_angle_max_min: tuple[float, float] = (-0.02, 0.02)
+
+# state to one tensor + past actions
+# not sure how to treat past actions, so will just keep it separate and pass it into actor and critic as another kwarg
+
+def state_to_tensors(
+    state: State
+) -> tuple[
+    Float['state_dim'],
+    Int['t na']
+]:
+
+    state_dict = state._as_dict()
+    past_actions = state_dict.pop('past_actor_actions')
+
+    state_features, _ = pack([*state_dict.values()], '*')
+
+    return state_features, past_actions
 
 # the f_tol function in the paper
 
@@ -551,12 +571,11 @@ class Actor(Module):
         state,
         past_actions: Int['b na'] | None = None
     ):
-        batch = state.shape[0]
 
         if exists(past_actions):
             action_embed = self.past_actions_net(past_actions)
         else:
-            action_embed = repeat(self.null_action_embed, 'da -> b da', b = batch)
+            action_embed = repeat(self.null_action_embed, 'da -> b da', b = state.shape[0])
 
         state = cat((state, action_embed), dim = -1)
 
@@ -664,11 +683,36 @@ class Critics(Module):
     def __init__(
         self,
         weights: tuple[float, ...],
+        num_actions = None,
         dims: tuple[int, ...] = (512, 256),
         num_critics = 4,
     ):
         super().__init__()
-        dims = (*dims, 1)
+
+        first_dim, *dims = dims
+
+        # critics can optionally see the past actions as well
+
+        self.past_actions_net = None
+
+        if exists(num_actions):
+            # embedding past actions + a simple depthwise conv, to account for action rate / action smoothness rewards
+
+            self.past_actions_net = nn.Sequential(
+                nn.Embedding(num_actions, dim_action_embed),
+                Rearrange('b na da -> b da na'),
+                nn.Conv1d(dim_action_embed, dim_action_embed, past_action_conv_kernel, padding = past_action_conv_kernel // 2),
+                nn.ReLU(),
+                Reduce('b da na -> b da', 'sum')
+            )
+
+            self.null_action_embed = nn.Parameter(torch.zeros(dim_action_embed))
+
+            first_dim += dim_action_embed
+
+        # grouped mlp for the grouped critic scheme from boston university paper
+
+        dims = (first_dim, *dims, 1)
 
         self.mlps = GroupedMLP(*dims, num_mlps = num_critics)
 
@@ -694,8 +738,16 @@ class Critics(Module):
     def forward(
         self,
         state,
-        rewards = None # Float['b g']
+        rewards: Float['b g'] | None = None,
+        past_actions: Int['b na'] | None = None,
     ):
+
+        if exists(past_actions):
+            assert exists(self.past_actions_net)
+            action_embed = self.past_actions_net(past_actions)
+        else:
+            action_embed = repeat(self.null_action_embed, 'da -> b da', b = state.shape[0])
+
         values = self.mlps(state)
         values = rearrange(values, '... 1 -> ...')
 
@@ -703,6 +755,17 @@ class Critics(Module):
             return values
 
         return F.mse_loss(rewards, values)
+
+# memories
+
+Memory = namedtuple('Memories', [
+    'state',
+    'actions',
+    'old_log_probs',
+    'rewards',
+    'values',
+    'done'
+])
 
 # agent - consisting of actor and critic
 
@@ -717,7 +780,9 @@ class Agent(Module):
         actor_optim_kwargs: dict = dict(),
         critics_optim_kwargs: dict = dict(),
         optim_klass = Adam,
-        reward_config = REWARD_CONFIG
+        reward_config = REWARD_CONFIG,
+        num_episodes = 5,
+        max_episode_timesteps = 100,
     ):
         super().__init__()
 
@@ -734,6 +799,11 @@ class Agent(Module):
 
         self.actor_optim = optim_klass(self.actor.parameters(), lr = actor_lr, **actor_optim_kwargs)
         self.critics_optim = optim_klass(self.critics.parameters(), lr = critics_lr, **critics_optim_kwargs)
+
+        # episodes with environment
+
+        self.num_episodes = num_episodes
+        self.max_episode_timesteps = max_episode_timesteps
 
     def save(
         self,
@@ -778,10 +848,29 @@ class Agent(Module):
         if 'critics_optim' in pkg:
             self.critics_optim.load_state_dict(pkg['critics_optim'])
 
+    def learn(
+        self,
+        memories: list[Memory]
+    ):
+        raise NotImplementedError
+
     def forward(
         self,
-        env: Iterable[State],
+        env,
         hparam: HyperParams | None = None
-    ):
 
-        raise NotImplementedError
+    ) -> list[Memory]:
+
+        memories = []
+
+        for _ in range(self.num_episodes):
+
+            timestep = 0
+
+            state = env.reset()
+
+            while timestep < self.max_episode_timesteps:
+
+                timestep += 1
+
+        return memories

@@ -3,5 +3,6 @@ from host_pytorch.host import (
     Critics,
     GroupedMLP,
     MLP,
-    Agent
+    Agent,
+    State
 )

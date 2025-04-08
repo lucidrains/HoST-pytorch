@@ -1,6 +1,6 @@
 [project]
 name = "HoST-pytorch"
-version = "0.0.15"
+version = "0.0.16"
 description = "Humanoid Standing Up"
 authors = [
     { name = "Phil Wang", email = "lucidrains@gmail.com" }
@@ -27,8 +27,10 @@ classifiers=[
 dependencies = [
     "einx>=0.3.0",
     "einops>=0.8.1",
+    "jaxtyping",
     "hl-gauss-pytorch>=0.1.19",
     "torch>=2.2",
+    'tqdm'
 ]
 
 [project.urls]
