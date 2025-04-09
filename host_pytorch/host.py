@@ -115,6 +115,8 @@ class State:
     right_feet_height: Float['']
     left_shank_angle: Float['']
     right_shank_angle: Float['']
+    left_feet_pos: Float['xyz']
+    right_feet_pos: Float['xyz']
     upper_body_posture: Float['d']
     height_base: Float['']
     contact_force: Float['xyz']
@@ -124,6 +126,7 @@ class State:
     knee_joint_angle_lr: Float['lr']
     shoulder_joint_angle_l: Float['']
     shoulder_joint_angle_r: Float['']
+    waist_yaw_joint_angle: Float['']
 
 @dataclass
 class HyperParams:
@@ -183,9 +186,9 @@ def ftol(
 
     # gaussian sigmoid
 
-    distance_margin = torch.where(x < low, low - x, x - high) / margin
+    distance_margin = torch.where(value < low, low - value, value - high) / margin
 
-    scale = torch.sqrt(-2 * value_at_margin.log())
+    scale = torch.sqrt(-2 * tensor(value_at_margin).log())
     return (-0.5 * (distance_margin * scale).pow(2)).exp()
 
 # task rewards - It specifies the high-level task objectives.
@@ -249,7 +252,7 @@ def reward_ankle_parallel(state: State, hparam: HyperParams, past_actions = None
 
     var = lambda t: t.var(dim = -1, unbiased = True)
 
-    ankle_is_parallel = ((var(left_qz) + var(right_qz)) * hparam.ankle_parallel_thres) < thres
+    ankle_is_parallel = ((var(left_qz) + var(right_qz)) * 0.5) < hparam.ankle_parallel_thres
 
     return ankle_is_parallel.float()
 
@@ -310,13 +313,13 @@ def reward_smoothness(state: State, hparam: HyperParams, past_actions = None):
 def reward_torques(state: State, hparam: HyperParams, past_actions = None):
     """ It penalizes the high joint torques. """
 
-    raise state.joint_torque.norm().pow(2)
+    return state.joint_torque.norm().pow(2)
 
 def reward_joint_power(state: State, hparam: HyperParams, past_actions = None): # not sure what T is
     """ It penalizes the high joint power """
 
     power = state.joint_torque * state.joint_velocity
-    raise power.abs().pow(hparam.joint_power_T)
+    return power.abs().pow(hparam.joint_power_T).sum() # just use a sum for now, unsure how to make a scalar from equation
 
 def reward_joint_velocity(state: State, hparam: HyperParams, past_actions = None):
     """ It penalizes the high joint velocity. """
@@ -358,7 +361,7 @@ def reward_base_linear_velocity(state: State, hparam: HyperParams, past_actions 
     is_past_stage2 = state.height_base > hparam.height_stage2_thres
 
     linear_velocity_base = state.linear_velocity[:2]
-    raise is_past_stage2 * linear_velocity_base.norm().mul(-2).exp()
+    return is_past_stage2 * linear_velocity_base.norm().mul(-2).exp()
 
 def reward_base_orientation(state: State, hparam: HyperParams, past_actions = None):
     """ It encourages the robot base to be perpendicular to the ground. """
@@ -366,21 +369,21 @@ def reward_base_orientation(state: State, hparam: HyperParams, past_actions = No
     is_past_stage2 = state.height_base > hparam.height_stage2_thres
 
     orientation_base = state.orientation[:2]
-    raise is_past_stage2 * orientation_base.norm().mul(-2).exp()
+    return is_past_stage2 * orientation_base.norm().mul(-2).exp()
 
 def reward_base_height(state: State, hparam: HyperParams, past_actions = None):
     """ It encourages the robot base to reach a target height. """
 
     is_past_stage2 = state.height_base > hparam.height_stage2_thres
 
-    return is_past_stage2 * (state.height_base - state.height_base_target).norm().pow(2).mul(-20).exp()
+    return is_past_stage2 * (state.height_base - hparam.height_base_target).norm().pow(2).mul(-20).exp()
 
 def reward_upper_body_posture(state: State, hparam: HyperParams, past_actions = None):
     """ It encourages the robot to track a target upper body postures. """
 
     is_past_stage2 = state.height_base > hparam.height_stage2_thres
 
-    return is_past_stage2 * (state.upper_body_posture - state.upper_body_posture_target).norm().mul(-1.).pow(2)
+    return is_past_stage2 * (state.upper_body_posture - hparam.upper_body_posture_target).norm().mul(-1.).pow(2)
 
 def reward_feet_parallel(state: State, hparam: HyperParams, past_actions = None):
     """ In encourages the feet to be parallel to each other. """
