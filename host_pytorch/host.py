@@ -7,7 +7,7 @@ from dataclasses import dataclass, asdict
 from collections import namedtuple
 
 import torch
-from torch import nn
+from torch import nn, Tensor, tensor
 import torch.nn.functional as F
 from torch.optim import Adam
 from torch import tensor, cat, stack
@@ -484,6 +484,9 @@ class RewardShapingWrapper(Module):
 
         # default reward hyperparams, but can be overridden
 
+        if isinstance(reward_hparams, dict):
+            reward_hparams = HyperParams(**reward_hparams)
+
         self.reward_hparams = reward_hparams
 
     def forward(
@@ -804,6 +807,7 @@ class Agent(Module):
         critics_optim_kwargs: dict = dict(),
         optim_klass = Adam,
         reward_config: list[RewardGroup] = DEFAULT_REWARD_CONFIG,
+        reward_hparams: HyperParams | dict | None = None,
         num_episodes = 5,
         max_episode_timesteps = 100,
     ):
@@ -813,12 +817,14 @@ class Agent(Module):
 
         reward_shaper = RewardShapingWrapper(
             reward_config,
-            critics_kwargs = {**critics, 'num_actions': actor.num_actions}
+            critics_kwargs = {**critics, 'num_actions': actor.num_actions},
+            reward_hparams = reward_hparams
         )
 
         self.actor = actor
         self.critics = reward_shaper.critics
-        self.reward_shaper = reward_shaper
+
+        self.state_to_reward = reward_shaper
 
         self.actor_optim = optim_klass(self.actor.parameters(), lr = actor_lr, **actor_optim_kwargs)
         self.critics_optim = optim_klass(self.critics.parameters(), lr = critics_lr, **critics_optim_kwargs)
@@ -880,9 +886,12 @@ class Agent(Module):
     def forward(
         self,
         env,
-        hparam: HyperParams | None = None
+        reward_hparams: HyperParams | None = None
 
-    ) -> list[Memory]:
+    ) -> tuple[
+        list[Memory],
+        Tensor
+    ]:
 
         memories = []
 
@@ -893,11 +902,50 @@ class Agent(Module):
 
             while timestep < self.max_episode_timesteps:
 
+                # State -> Float['state_dim']
+
                 state_tensor = state_to_tensor(state)
 
-                actions = self.actor(state_tensor)
-                values = self.critics(state_tensor)
+                # done would be whether it is the last time step of the episode
+                # but can also have some termination condition based on the robot's internal state
+
+                done = timestep == (self.max_episode_timesteps - 1)
+                done = tensor([done], device = state_tensor.device)
+
+                # rewards are derived from the state
+
+                rewards = self.state_to_reward(state, reward_hparams)
+
+                # sample the action from the actor
+                # and get the values from the critics
+
+                with torch.no_grad():
+                    self.actor.eval()
+                    self.critics.eval()
+
+                    actions, log_probs = self.actor(state_tensor, sample = True)
+
+                    values = self.critics(state_tensor)
+
+                # store memories
+
+                memory = Memory(
+                    state = state_tensor,
+                    actions = actions,
+                    old_log_probs = log_probs,
+                    rewards = rewards,
+                    values = values,
+                    done = done
+                )
+
+                memories.append(memory)
+
+                # next state
+
+                state = env(actions)
+
+                # increment timestep
 
                 timestep += 1
 
-        return memories
+        return (memories, state)

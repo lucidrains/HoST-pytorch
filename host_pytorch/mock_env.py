@@ -1,4 +1,5 @@
 from __future__ import annotations
+from dataclasses import asdict
 
 import torch
 from torch import tensor, randn, randint
@@ -6,6 +7,8 @@ from torch.nn import Module
 
 from host_pytorch.host import State, HyperParams
 from host_pytorch.tensor_typing import Int
+
+from einops import pack
 
 # functions
 
@@ -68,6 +71,14 @@ class Env(Module):
     def __init__(self):
         super().__init__()
         self.register_buffer('dummy', tensor(0))
+
+    @property
+    def dim_state(self):
+        state_dict = asdict(random_state())
+
+        state_features, _ = pack([*state_dict.values()], '*')
+
+        return state_features.shape[-1]
 
     @property
     def device(self):

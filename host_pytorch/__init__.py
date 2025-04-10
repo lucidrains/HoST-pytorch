@@ -6,3 +6,9 @@ from host_pytorch.host import (
     Agent,
     State
 )
+
+from host_pytorch.host import (
+    RewardFunctionAndWeight,
+    RewardGroup,
+    validate_reward_config_
+)
