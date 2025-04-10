@@ -784,13 +784,18 @@ class Critics(Module):
 
 # memories
 
-Memory = namedtuple('Memories', [
+Memory = namedtuple('Memory', [
     'state',
     'actions',
     'old_log_probs',
     'rewards',
     'values',
     'done'
+])
+
+Memories = namedtuple('Memories', [
+    'memories',
+    'next_state'
 ])
 
 # agent - consisting of actor and critic
@@ -879,7 +884,7 @@ class Agent(Module):
 
     def learn(
         self,
-        memories: list[Memory]
+        memories_and_next_state: Memories,
     ):
         raise NotImplementedError
 
@@ -888,10 +893,7 @@ class Agent(Module):
         env,
         reward_hparams: HyperParams | None = None
 
-    ) -> tuple[
-        list[Memory],
-        Tensor
-    ]:
+    ) -> Memories:
 
         memories = []
 
@@ -910,7 +912,7 @@ class Agent(Module):
                 # but can also have some termination condition based on the robot's internal state
 
                 done = timestep == (self.max_episode_timesteps - 1)
-                done = tensor([done], device = state_tensor.device)
+                done = tensor(done, device = state_tensor.device)
 
                 # rewards are derived from the state
 
@@ -948,4 +950,4 @@ class Agent(Module):
 
                 timestep += 1
 
-        return (memories, state)
+        return Memories(memories, state)
