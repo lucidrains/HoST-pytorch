@@ -599,6 +599,8 @@ class Actor(Module):
         past_actions: Int['b na'] | None = None
     ):
 
+        no_batch = state.ndim == 1
+
         if exists(past_actions) and not is_empty(past_actions):
             action_embed = self.past_actions_net(past_actions)
         else:
@@ -607,6 +609,10 @@ class Actor(Module):
         state = cat((state, action_embed), dim = -1)
 
         logits = self.net(state)
+
+        if no_batch:
+            logits = rearrange(logits, '1 ... -> ...')
+
         return logits
 
     def forward_for_loss(
@@ -640,12 +646,15 @@ class Actor(Module):
     def forward(
         self,
         state: Float['d'] | Float['b d'],
-        past_actions: Int['b na'] | None = None,
+        past_actions: Int['b na'] | Int['na'] | None = None,
         sample = False,
         sample_return_log_prob = True
     ):
         if state.ndim == 1:
             state = rearrange(state, 'd -> 1 d')
+
+            if exists(past_actions):
+                past_actions = rearrange(past_actions, '... -> 1 ...')
 
         logits = self.forward_net(state, past_actions)
 
@@ -769,8 +778,11 @@ class Critics(Module):
         past_actions: Int['b na'] | None = None,
     ):
         no_batch = state.ndim == 1
+
         if no_batch:
             state = rearrange(state, 'd -> 1 d')
+            if exists(past_actions):
+                past_actions = rearrange(past_actions, '... -> 1 ...')
 
         if exists(past_actions) and not is_empty(past_actions):
             assert exists(self.past_actions_net)
