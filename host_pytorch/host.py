@@ -43,6 +43,9 @@ def divisible_by(num, den):
 def log(t, eps = 1e-20):
     return torch.log(t.clamp(min = eps))
 
+def is_empty(t):
+    return t.numel() == 0
+
 def calc_entropy(prob, eps = 1e-20, dim = -1):
     return -(prob * log(prob, eps)).sum(dim = dim)
 
@@ -593,7 +596,7 @@ class Actor(Module):
         past_actions: Int['b na'] | None = None
     ):
 
-        if exists(past_actions):
+        if exists(past_actions) and not is_empty(past_actions):
             action_embed = self.past_actions_net(past_actions)
         else:
             action_embed = repeat(self.null_action_embed, 'da -> b da', b = state.shape[0])
@@ -766,7 +769,7 @@ class Critics(Module):
         if state.ndim == 1:
             state = rearrange(state, 'd -> 1 d')
 
-        if exists(past_actions):
+        if exists(past_actions) and not is_empty(past_actions):
             assert exists(self.past_actions_net)
             action_embed = self.past_actions_net(past_actions)
         else:
