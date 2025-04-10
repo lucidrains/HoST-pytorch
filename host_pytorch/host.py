@@ -1,5 +1,6 @@
 from __future__ import annotations
-from typing import Iterable
+from typing import Iterable, NamedTuple, Callable
+from pydantic import BaseModel, TypeAdapter
 
 from pathlib import Path
 from dataclasses import dataclass, asdict
@@ -394,7 +395,20 @@ def reward_feet_parallel(state: State, hparam: HyperParams, past_actions = None)
 
 # reward config with all the weights
 
-REWARD_CONFIG = [
+class RewardFunctionAndWeight(NamedTuple):
+    function: Callable
+    weight: float
+
+class RewardGroup(NamedTuple):
+    name: str
+    weight: float
+    reward: list[RewardFunctionAndWeight]
+
+def validate_reward_config_(config):
+    adapter = TypeAdapter(list[RewardGroup])
+    adapter.validate_python(config)
+
+DEFAULT_REWARD_CONFIG = [
     ('task', 2.5, [
         (reward_head_height, 1),
         (reward_base_orientation, 1),
@@ -435,12 +449,15 @@ REWARD_CONFIG = [
 class RewardShapingWrapper(Module):
     def __init__(
         self,
-        config = REWARD_CONFIG,
+        config: list[RewardGroup] = DEFAULT_REWARD_CONFIG,
         critics_kwargs: dict = dict(),
         reward_hparams: HyperParams | None = None
     ):
         super().__init__()
 
+        # use pydantic for validating the config and then store
+
+        validate_reward_config_(config)
         self.config = config
 
         # based on the reward group config
@@ -786,7 +803,7 @@ class Agent(Module):
         actor_optim_kwargs: dict = dict(),
         critics_optim_kwargs: dict = dict(),
         optim_klass = Adam,
-        reward_config = REWARD_CONFIG,
+        reward_config: list[RewardGroup] = DEFAULT_REWARD_CONFIG,
         num_episodes = 5,
         max_episode_timesteps = 100,
     ):
