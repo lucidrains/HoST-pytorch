@@ -1,4 +1,5 @@
 from __future__ import annotations
+from functools import partial
 from typing import Iterable, NamedTuple, Callable
 from pydantic import BaseModel, TypeAdapter
 
@@ -7,10 +8,9 @@ from dataclasses import dataclass, asdict
 from collections import namedtuple
 
 import torch
-from torch import nn, Tensor, tensor
+from torch import nn, Tensor, tensor, cat, stack
 import torch.nn.functional as F
 from torch.optim import Adam
-from torch import tensor, cat, stack
 from torch.nn import Module, ModuleList, Linear
 
 from hl_gauss_pytorch import HLGaussLoss
@@ -65,22 +65,20 @@ def get_log_prob(t, indices, is_prob = False):
 # generalized advantage estimate
 
 def calc_target_and_gae(
-    rewards,
-    values,
-    masks,
+    rewards: Float['g n'],
+    values: Float['g n+1'],
+    masks: Bool['n'],
     gamma = 0.99,
     lam = 0.95,
     use_accelerated = None
 
 ):
-    assert rewards.shape[-1] == (values.shape[-1] + 1)
+    assert values.shape[-1] == (rewards.shape[-1] + 1)
 
     use_accelerated = default(use_accelerated, rewards.is_cuda)
     device = rewards.device
 
-    rewards, inverse_pack = pack_one(rewards, '* n')
-    values, _ = pack_one(values, '* n')
-    masks, _ = pack_one(masks, '* n')
+    masks = repeat(masks, 'n -> g n', g = rewards.shape[0])
 
     values, values_next = values[:, :-1], values[:, 1:]
 
@@ -90,13 +88,12 @@ def calc_target_and_gae(
     gates, delta = gates[..., :, None], delta[..., :, None]
 
     scan = AssocScan(reverse = True, use_accelerated = use_accelerated)
+
     gae = scan(gates, delta)
 
     gae = gae[..., :, 0]
 
     returns = gae + values
-
-    gae, returns = tuple(inverse_pack(t) for t in (gae, returns))
 
     return returns, gae
 
@@ -765,8 +762,8 @@ class Critics(Module):
         rewards: Float['b g'] | None = None,
         past_actions: Int['b na'] | None = None,
     ):
-
-        if state.ndim == 1:
+        no_batch = state.ndim == 1
+        if no_batch:
             state = rearrange(state, 'd -> 1 d')
 
         if exists(past_actions) and not is_empty(past_actions):
@@ -779,6 +776,9 @@ class Critics(Module):
 
         values = self.mlps(state)
         values = rearrange(values, '... 1 -> ...')
+
+        if no_batch:
+            values = rearrange(values, '1 ... -> ...')
 
         if not exists(rewards):
             return values
@@ -798,7 +798,7 @@ Memory = namedtuple('Memory', [
 
 Memories = namedtuple('Memories', [
     'memories',
-    'next_state'
+    'next_value'
 ])
 
 # agent - consisting of actor and critic
@@ -818,6 +818,11 @@ class Agent(Module):
         reward_hparams: HyperParams | dict | None = None,
         num_episodes = 5,
         max_episode_timesteps = 100,
+        gae_gamma = 0.99,
+        gae_lam = 0.95,
+        calc_gae_use_accelerated = None,
+        epochs = 2,
+        batch_size = 16
     ):
         super().__init__()
 
@@ -841,6 +846,15 @@ class Agent(Module):
 
         self.num_episodes = num_episodes
         self.max_episode_timesteps = max_episode_timesteps
+
+        # calculating gae
+
+        self.calc_target_and_gae = partial(
+            calc_target_and_gae,
+            gamma = gae_gamma,
+            lam = gae_lam,
+            use_accelerated = calc_gae_use_accelerated
+        )
 
     def save(
         self,
@@ -887,8 +901,36 @@ class Agent(Module):
 
     def learn(
         self,
-        memories_and_next_state: Memories,
+        memories_and_next_value: Memories,
     ):
+        memories, next_value = memories_and_next_value
+
+        # stack all the memories across time
+
+        (
+            states,
+            actions,
+            log_probs,
+            rewards,
+            values,
+            dones
+        ) = map(stack, zip(*memories))
+
+        # calculating returns and generalized advantage estimate
+
+        rewards = rearrange(rewards, '... g -> g ...')
+
+        values_with_next, _ = pack((values, next_value), '* g')
+        values_with_next = rearrange(values_with_next, '... g -> g ...')
+
+        returns, gae = self.calc_target_and_gae(rewards, values_with_next, dones)
+
+        returns = rearrange(returns, 'g ... -> ... g')
+        gae = rearrange(gae, 'g ... -> ... g')
+
+        # update actor and critic
+        # todo
+
         raise NotImplementedError
 
     def forward(
@@ -953,4 +995,10 @@ class Agent(Module):
 
                 timestep += 1
 
-        return Memories(memories, state)
+        with torch.no_grad():
+            self.critics.eval()
+
+            state_tensor = state_to_tensor(state)
+            next_value = self.critics(state_tensor)
+
+        return Memories(memories, next_value)

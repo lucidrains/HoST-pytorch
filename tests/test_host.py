@@ -47,7 +47,6 @@ def test_actor_critic_reward_shaper():
 
     rewards = reward_shaping(env.reset(), hparams)
 
-
 def test_e2e():
 
     env = Env()
