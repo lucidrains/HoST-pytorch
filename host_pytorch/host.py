@@ -38,6 +38,12 @@ def default(v, d):
 def divisible_by(num, den):
     return (num % den) == 0
 
+def safe_cat(acc, el, dim = -1):
+    if not exists(acc):
+        return el
+
+    return cat((acc, el), dim = dim)
+
 # sampling related
 
 def log(t, eps = 1e-20):
@@ -809,6 +815,7 @@ class Agent(Module):
         *,
         actor: dict,
         critics: dict,
+        num_past_actions = 3,
         actor_lr = 1e-4,
         critics_lr = 1e-4,
         actor_optim_kwargs: dict = dict(),
@@ -841,6 +848,8 @@ class Agent(Module):
 
         self.actor_optim = optim_klass(self.actor.parameters(), lr = actor_lr, **actor_optim_kwargs)
         self.critics_optim = optim_klass(self.critics.parameters(), lr = critics_lr, **critics_optim_kwargs)
+
+        self.num_past_actions = num_past_actions
 
         # episodes with environment
 
@@ -947,6 +956,8 @@ class Agent(Module):
             timestep = 0
             state = env.reset()
 
+            past_actions = None
+
             while timestep < self.max_episode_timesteps:
 
                 # State -> Float['state_dim']
@@ -966,13 +977,19 @@ class Agent(Module):
                 # sample the action from the actor
                 # and get the values from the critics
 
+                actor_critic_past_actions = past_actions[-self.num_past_actions:] if exists(past_actions) else None
+
                 with torch.no_grad():
                     self.actor.eval()
                     self.critics.eval()
 
-                    actions, log_probs = self.actor(state_tensor, sample = True)
+                    actions, log_probs = self.actor(state_tensor, sample = True, past_actions = actor_critic_past_actions)
 
-                    values = self.critics(state_tensor)
+                    values = self.critics(state_tensor, past_actions = actor_critic_past_actions)
+
+                # store past actions
+
+                past_actions = safe_cat(past_actions, actions)
 
                 # store memories
 
