@@ -16,7 +16,6 @@ $ pip install HoST-pytorch
 
 ```python
 import torch
-from torch import randn
 from host_pytorch import Agent
 from host_pytorch.mock_env import Env, mock_hparams
 
