@@ -74,4 +74,6 @@ def test_e2e():
 
     memories = agent(env)
 
+    agent.learn(memories)
+
     agent.save('./standing-up-policy.pt', overwrite = True)

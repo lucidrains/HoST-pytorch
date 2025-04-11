@@ -552,6 +552,38 @@ class MLP(Module):
 
         return x
 
+# module for handling variable length past actions
+
+class PastActionsNet(Module):
+    def __init__(
+        self,
+        num_actions,
+        dim_action_embed,
+        past_action_conv_kernel
+    ):
+        super().__init__()
+
+        self.net = nn.Sequential(
+            nn.Embedding(num_actions, dim_action_embed),
+            Rearrange('b na da -> b da na'),
+            nn.Conv1d(dim_action_embed, dim_action_embed, past_action_conv_kernel, padding = past_action_conv_kernel // 2),
+            nn.ReLU(),
+        )
+
+        self.null_action_embed = nn.Parameter(torch.zeros(dim_action_embed))
+
+    def forward(
+        self,
+        past_actions
+    ):
+        is_padding = past_actions < 0
+        past_actions = past_actions.masked_fill(is_padding, 0)
+
+        action_embed = self.net(past_actions)
+
+        action_embed = action_embed.masked_fill(is_padding[..., None, :], 0.)
+        return reduce(action_embed, '... na -> ...', 'sum')
+
 # actor
 
 class Actor(Module):
@@ -573,14 +605,11 @@ class Actor(Module):
 
         self.num_actions = num_actions
 
-        self.past_actions_net = nn.Sequential(
-            nn.Embedding(num_actions, dim_action_embed),
-            Rearrange('b na da -> b da na'),
-            nn.Conv1d(dim_action_embed, dim_action_embed, past_action_conv_kernel, padding = past_action_conv_kernel // 2),
-            nn.ReLU(),
+        self.past_actions_net = PastActionsNet(
+            num_actions,
+            dim_action_embed,
+            past_action_conv_kernel
         )
-
-        self.null_action_embed = nn.Parameter(torch.zeros(dim_action_embed))
 
         # backbone mlp
 
@@ -603,17 +632,11 @@ class Actor(Module):
 
         no_batch = state.ndim == 1
 
-        if exists(past_actions) and not is_empty(past_actions):
-            is_padding = past_actions < 0
-            past_actions = past_actions.masked_fill(is_padding, 0)
+        if not exists(past_actions):
+            batch, device = state.shape[0], state.device
+            past_actions = torch.full((batch, 1), -1, device = device, dtype = torch.long)
 
-            action_embed = self.past_actions_net(past_actions)
-
-            action_embed = action_embed.masked_fill(is_padding[..., None, :], 0.)
-            action_embed = reduce(action_embed, '... na -> ...', 'sum')
-        else:
-            action_embed = repeat(self.null_action_embed, 'da -> b da', b = state.shape[0])
-
+        action_embed = self.past_actions_net(past_actions)
         state = cat((state, action_embed), dim = -1)
 
         logits = self.net(state)
@@ -742,14 +765,11 @@ class Critics(Module):
 
         # critics can see the past actions as well
 
-        self.past_actions_net = nn.Sequential(
-            nn.Embedding(num_actions, dim_action_embed),
-            Rearrange('b na da -> b da na'),
-            nn.Conv1d(dim_action_embed, dim_action_embed, past_action_conv_kernel, padding = past_action_conv_kernel // 2),
-            nn.ReLU(),
+        self.past_actions_net = PastActionsNet(
+            num_actions,
+            dim_action_embed,
+            past_action_conv_kernel
         )
-
-        self.null_action_embed = nn.Parameter(torch.zeros(dim_action_embed))
 
         first_dim += dim_action_embed
 
@@ -791,19 +811,13 @@ class Critics(Module):
             if exists(past_actions):
                 past_actions = rearrange(past_actions, '... -> 1 ...')
 
-        if exists(past_actions) and not is_empty(past_actions):
-            assert exists(self.past_actions_net)
-            is_padding = past_actions < 0
-            past_actions = past_actions.masked_fill(is_padding, 0)
+        if not exists(past_actions):
+            batch, device = state.shape[0], state.device
+            past_actions = torch.full((batch, 1), -1, device = device, dtype = torch.long)
 
-            action_embed = self.past_actions_net(past_actions)
+        past_actions_embed = self.past_actions_net(past_actions)
 
-            action_embed = action_embed.masked_fill(is_padding[..., None, :], 0.)
-            action_embed = reduce(action_embed, '... na -> ...', 'sum')
-        else:
-            action_embed = repeat(self.null_action_embed, 'da -> b da', b = state.shape[0])
-
-        state = cat((state, action_embed), dim = -1)
+        state = cat((state, past_actions_embed), dim = -1)
 
         values = self.mlps(state)
         values = rearrange(values, '... 1 -> ...')
