@@ -578,7 +578,6 @@ class Actor(Module):
             Rearrange('b na da -> b da na'),
             nn.Conv1d(dim_action_embed, dim_action_embed, past_action_conv_kernel, padding = past_action_conv_kernel // 2),
             nn.ReLU(),
-            Reduce('b da na -> b da', 'sum')
         )
 
         self.null_action_embed = nn.Parameter(torch.zeros(dim_action_embed))
@@ -605,7 +604,13 @@ class Actor(Module):
         no_batch = state.ndim == 1
 
         if exists(past_actions) and not is_empty(past_actions):
+            is_padding = past_actions < 0
+            past_actions = past_actions.masked_fill(is_padding, 0)
+
             action_embed = self.past_actions_net(past_actions)
+
+            action_embed = action_embed.masked_fill(is_padding[..., None, :], 0.)
+            action_embed = reduce(action_embed, '... na -> ...', 'sum')
         else:
             action_embed = repeat(self.null_action_embed, 'da -> b da', b = state.shape[0])
 
@@ -742,7 +747,6 @@ class Critics(Module):
             Rearrange('b na da -> b da na'),
             nn.Conv1d(dim_action_embed, dim_action_embed, past_action_conv_kernel, padding = past_action_conv_kernel // 2),
             nn.ReLU(),
-            Reduce('b da na -> b da', 'sum')
         )
 
         self.null_action_embed = nn.Parameter(torch.zeros(dim_action_embed))
@@ -789,7 +793,13 @@ class Critics(Module):
 
         if exists(past_actions) and not is_empty(past_actions):
             assert exists(self.past_actions_net)
+            is_padding = past_actions < 0
+            past_actions = past_actions.masked_fill(is_padding, 0)
+
             action_embed = self.past_actions_net(past_actions)
+
+            action_embed = action_embed.masked_fill(is_padding[..., None, :], 0.)
+            action_embed = reduce(action_embed, '... na -> ...', 'sum')
         else:
             action_embed = repeat(self.null_action_embed, 'da -> b da', b = state.shape[0])
 
@@ -955,9 +965,27 @@ class Agent(Module):
         returns = rearrange(returns, 'g ... -> ... g')
         gae = rearrange(gae, 'g ... -> ... g')
 
+        # prepare past actions
+
+        episode_num = dones.cumsum(dim = -1)
+        episode_num = F.pad(episode_num, (1, -1), value = 0)
+
+        actions = F.pad(actions, (0, 0, self.num_past_actions, 0), value = -1)
+
+        actions_with_past = actions.unfold(0, self.num_past_actions + 1, 1)
+
+        episode_num_with_past = F.pad(episode_num, (self.num_past_actions, 0), value = 0)
+        episode_num_with_past = episode_num_with_past.unfold(0, self.num_past_actions + 1, 1)
+
+        actions_with_past = rearrange(actions_with_past, 't na past -> t past na')
+
+        is_episode_overlap = episode_num[..., None] != episode_num_with_past
+
+        actions_with_past.masked_fill_(is_episode_overlap[..., None], -1)
+
         # ready experience data
 
-        dataset = TensorDataset(states, actions, log_probs, returns, values)
+        dataset = TensorDataset(states, actions_with_past, log_probs, returns, values)
 
         dataloader = DataLoader(dataset, batch_size = self.batch_size, shuffle = True)
 
@@ -969,13 +997,17 @@ class Agent(Module):
         for _ in tqdm(range(self.epochs), 'training epoch'):
             for (
                 states,
-                actions,
+                actions_with_past,
                 log_probs,
                 returns,
                 values
             ) in dataloader:
 
-                critics_loss = self.critics(states, rewards = returns)
+                past_actions, actions = actions_with_past[:, :-1], actions_with_past[:, -1]
+
+                past_actions = rearrange(past_actions, '... 1 -> ...')
+
+                critics_loss = self.critics(states, past_actions = past_actions, rewards = returns)
                 critics_loss.backward()
 
                 self.critics_optim.step()
@@ -983,7 +1015,7 @@ class Agent(Module):
 
                 advantages = self.critics.calc_advantages(values, rewards = returns)
 
-                actor_loss = self.actor.forward_for_loss(states, actions, log_probs, advantages)
+                actor_loss = self.actor.forward_for_loss(states, actions, log_probs, advantages, past_actions = past_actions)
                 actor_loss.backward()
 
                 self.actor_optim.step()
