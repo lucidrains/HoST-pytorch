@@ -7,11 +7,14 @@ from pathlib import Path
 from dataclasses import dataclass, asdict
 from collections import namedtuple
 
+from tqdm import tqdm
+
 import torch
 from torch import nn, Tensor, tensor, cat, stack
 import torch.nn.functional as F
 from torch.optim import Adam
 from torch.nn import Module, ModuleList, Linear
+from torch.utils.data import DataLoader, TensorDataset
 
 from hl_gauss_pytorch import HLGaussLoss
 
@@ -863,6 +866,9 @@ class Agent(Module):
 
         self.num_past_actions = num_past_actions
 
+        self.epochs = epochs
+        self.batch_size = batch_size
+
         # episodes with environment
 
         self.num_episodes = num_episodes
@@ -949,10 +955,39 @@ class Agent(Module):
         returns = rearrange(returns, 'g ... -> ... g')
         gae = rearrange(gae, 'g ... -> ... g')
 
-        # update actor and critic
-        # todo
+        # ready experience data
 
-        raise NotImplementedError
+        dataset = TensorDataset(states, actions, log_probs, returns, values)
+
+        dataloader = DataLoader(dataset, batch_size = self.batch_size, shuffle = True)
+
+        # update actor and critic
+
+        self.actor.train()
+        self.critics.train()
+
+        for _ in tqdm(range(self.epochs), 'training epoch'):
+            for (
+                states,
+                actions,
+                log_probs,
+                returns,
+                values
+            ) in dataloader:
+
+                critics_loss = self.critics(states, rewards = returns)
+                critics_loss.backward()
+
+                self.critics_optim.step()
+                self.critics_optim.zero_grad()
+
+                advantages = self.critics.calc_advantages(values, rewards = returns)
+
+                actor_loss = self.actor.forward_for_loss(states, actions, log_probs, advantages)
+                actor_loss.backward()
+
+                self.actor_optim.step()
+                self.actor_optim.zero_grad()
 
     def forward(
         self,
@@ -963,7 +998,7 @@ class Agent(Module):
 
         memories = []
 
-        for _ in range(self.num_episodes):
+        for _ in tqdm(range(self.num_episodes), desc = 'episodes'):
 
             timestep = 0
             state = env.reset()

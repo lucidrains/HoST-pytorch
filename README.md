@@ -6,6 +6,41 @@ Implementation of Humanoid Standing Up, from the paper <a href="https://taohuang
 
 Besides for the set of reward functions, the other contribution is validating [an approach using multiple critics](https://openreview.net/forum?id=rJvY_5OzoI) out of Boston University
 
+## Install
+
+```bash
+$ pip install HoST-pytorch
+```
+
+## Usage
+
+```python
+import torch
+from torch import randn
+from host_pytorch import Agent
+from host_pytorch.mock_env import Env, mock_hparams
+
+env = Env()
+
+agent = Agent(
+    actor = dict(
+        dims = (env.dim_state, 256, 128),
+        num_actions = 5,
+    ),
+    critics = dict(
+        dims = (env.dim_state, 256),
+        num_actions = 5
+    ),
+    reward_hparams = mock_hparams()
+)
+
+memories = agent(env)
+
+agent.learn(memories)
+
+agent.save('./standing-up-policy.pt', overwrite = True)
+```
+
 ## Citations
 
 ```bibtex
