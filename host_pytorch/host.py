@@ -22,7 +22,7 @@ import einx
 from einops import repeat, rearrange, reduce, pack
 from einops.layers.torch import Rearrange, Reduce, EinMix as Mix
 
-from host_pytorch.associative_scan import AssocScan
+from assoc_scan import AssocScan
 
 from host_pytorch.tensor_typing import Float, Int, Bool
 
