@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from functools import partial
 from typing import Iterable, NamedTuple, Callable
 from pydantic import BaseModel, TypeAdapter
@@ -829,6 +830,30 @@ class Critics(Module):
             return values
 
         return F.mse_loss(rewards, values)
+
+# hierarchical controller
+
+class HierarchicalController(Module):
+    def __init__(
+        self,
+        dim_state,
+        actors: list[Actor]
+    ):
+        super().__init__()
+
+        self.actors = ModuleList(actors)
+
+        self.gates = nn.Sequential(
+            nn.Linear(dim_state, len(actors)),
+            nn.Softmax(dim = -1)
+        )
+
+    def forward(
+        self,
+        state
+    ):
+        gates = self.to_gates(state)
+        raise NotImplementedError
 
 # memories
 
