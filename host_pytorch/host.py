@@ -29,6 +29,12 @@ import einx
 from einops import repeat, rearrange, reduce, pack
 from einops.layers.torch import Rearrange, Reduce, EinMix as Mix
 
+# b - batch
+# t - time
+# a - actions
+# d - feature dimension
+# past - past actions
+
 # constants
 
 INF = float('inf')
@@ -857,7 +863,7 @@ class Critics(Module):
         self,
         state: Float['d'] | Float['b d'],
         rewards: Float['b g'] | None = None,
-        past_actions: Int['b na'] | None = None,
+        past_actions: Int['b past a'] | Int['past a'] | None = None,
     ):
         no_batch = state.ndim == 1
 
