@@ -22,13 +22,12 @@ from host_pytorch.mock_env import Env, mock_hparams
 env = Env()
 
 agent = Agent(
+    num_actions = (10, 10, 20),
     actor = dict(
         dims = (env.dim_state, 256, 128),
-        num_actions = 5,
     ),
     critics = dict(
         dims = (env.dim_state, 256),
-        num_actions = 5
     ),
     reward_hparams = mock_hparams()
 )

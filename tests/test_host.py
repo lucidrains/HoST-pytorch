@@ -1,3 +1,5 @@
+import pytest
+
 import torch
 from torch import randn
 
@@ -22,7 +24,7 @@ def test_actor_critic_reward_shaper():
     )
 
     state = torch.randn(4, 512)
-    actions, log_prob = actor(state, past_actions = torch.randint(0, 4, (4, 2)), sample = True)
+    actions, log_prob = actor(state, past_actions = torch.randint(0, 4, (4, 2, 1)), sample = True)
 
     critics = Critics([1., 2.], num_critics = 2, num_actions = 4)
 
@@ -47,18 +49,20 @@ def test_actor_critic_reward_shaper():
 
     rewards = reward_shaping(env.reset(), hparams)
 
-def test_e2e():
+@pytest.mark.parametrize('num_actions', (5, (3, 5, 2)))
+def test_e2e(
+    num_actions
+):
 
     env = Env()
 
     agent = Agent(
+        num_actions = num_actions,
         actor = dict(
             dims = (env.dim_state, 256, 128),
-            num_actions = 5,
         ),
         critics = dict(
             dims = (env.dim_state, 256),
-            num_actions = 5
         ),
         reward_hparams = dict(
             height_stage1_thres = randn(()),

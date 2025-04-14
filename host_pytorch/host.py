@@ -19,13 +19,15 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from hl_gauss_pytorch import HLGaussLoss
 
-import einx
-from einops import repeat, rearrange, reduce, pack
-from einops.layers.torch import Rearrange, Reduce, EinMix as Mix
-
 from assoc_scan import AssocScan
 
 from host_pytorch.tensor_typing import Float, Int, Bool
+
+# einstein notation related
+
+import einx
+from einops import repeat, rearrange, reduce, pack
+from einops.layers.torch import Rearrange, Reduce, EinMix as Mix
 
 # constants
 
@@ -42,6 +44,9 @@ def default(v, d):
 def divisible_by(num, den):
     return (num % den) == 0
 
+def cast_tuple(t):
+    return (t,) if not isinstance(t, tuple) else t
+
 def safe_cat(acc, el, dim = -1):
     if not exists(acc):
         return el
@@ -56,6 +61,10 @@ def log(t, eps = 1e-20):
 def is_empty(t):
     return t.numel() == 0
 
+def exclusive_cumsum(t):
+    t = t.cumsum(dim = -1)
+    return F.pad(t, (1, -1), value = 0)
+
 def calc_entropy(prob, eps = 1e-20, dim = -1):
     return -(prob * log(prob, eps)).sum(dim = dim)
 
@@ -65,12 +74,6 @@ def gumbel_noise(t):
 
 def gumbel_sample(t, temperature = 1., dim = -1):
     return ((t / max(temperature, 1e-10)) + gumbel_noise(t)).argmax(dim = dim)
-
-def get_log_prob(t, indices, is_prob = False):
-    log_probs = t.log_softmax(dim = -1) if not is_prob else log(t)
-    indices = rearrange(indices, '... -> ... 1')
-    sel_log_probs = log_probs.gather(-1, indices)
-    return rearrange(sel_log_probs, '... 1 -> ...')
 
 # generalized advantage estimate
 
@@ -558,39 +561,57 @@ class MLP(Module):
 class PastActionsNet(Module):
     def __init__(
         self,
-        num_actions,
+        num_actions: int | tuple[int, ...],
         dim_action_embed,
         past_action_conv_kernel
     ):
         super().__init__()
 
+        num_actions = cast_tuple(num_actions)
+
+        total_actions = sum(num_actions)
+
+        self.num_actions = num_actions
+        dim_all_actions = dim_action_embed * len(num_actions)
+
+        self.dim_all_actions = dim_all_actions
+
+        # network that does a convolution across previous actions before pooling
+
         self.net = nn.Sequential(
-            nn.Embedding(num_actions, dim_action_embed),
-            Rearrange('b na da -> b da na'),
-            nn.Conv1d(dim_action_embed, dim_action_embed, past_action_conv_kernel, padding = past_action_conv_kernel // 2),
+            nn.Embedding(total_actions, dim_action_embed),
+            Rearrange('b past a d -> b (a d) past'),
+            nn.Conv1d(dim_all_actions, dim_all_actions, past_action_conv_kernel, padding = past_action_conv_kernel // 2),
             nn.ReLU(),
         )
 
-        self.null_action_embed = nn.Parameter(torch.zeros(dim_action_embed))
+        self.null_action_embed = nn.Parameter(torch.zeros(dim_all_actions))
+
+        offset = exclusive_cumsum(tensor(num_actions))
+        self.register_buffer('action_offset', offset)
 
     def forward(
         self,
-        past_actions
+        past_actions # Int[b past a]
     ):
+
         is_padding = past_actions < 0
+
+        past_actions = past_actions + self.action_offset
         past_actions = past_actions.masked_fill(is_padding, 0)
 
         action_embed = self.net(past_actions)
+        all_actions_are_padding = is_padding.all(dim = -1)
 
-        action_embed = action_embed.masked_fill(is_padding[..., None, :], 0.)
-        return reduce(action_embed, '... na -> ...', 'sum')
+        action_embed = action_embed.masked_fill(all_actions_are_padding[..., None, :], 0.)
+        return reduce(action_embed, '... past -> ...', 'sum')
 
 # actor
 
 class Actor(Module):
     def __init__(
         self,
-        num_actions,
+        num_actions: int | tuple[int, ...],
         dims: tuple[int, ...] = (512, 256, 128),
         eps_clip = 0.2,
         beta_s = .01,
@@ -604,7 +625,10 @@ class Actor(Module):
 
         # embedding past actions + a simple depthwise conv, to account for action rate / action smoothness rewards
 
+        num_actions = cast_tuple(num_actions)
+
         self.num_actions = num_actions
+        self.num_action_sets = len(num_actions)
 
         self.past_actions_net = PastActionsNet(
             num_actions,
@@ -612,11 +636,14 @@ class Actor(Module):
             past_action_conv_kernel
         )
 
+        offset = exclusive_cumsum(tensor(num_actions))
+        self.register_buffer('action_offset', offset)
+
         # backbone mlp
 
-        first_state_dim += dim_action_embed
+        first_state_dim += self.past_actions_net.dim_all_actions
 
-        dims = (first_state_dim, *dims, num_actions)
+        dims = (first_state_dim, *dims, sum(num_actions))
 
         self.net = MLP(*dims)
 
@@ -628,22 +655,18 @@ class Actor(Module):
     def forward_net(
         self,
         state,
-        past_actions: Int['b na'] | None = None
+        past_actions: Int['b past a'] | None = None
     ):
-
-        no_batch = state.ndim == 1
 
         if not exists(past_actions):
             batch, device = state.shape[0], state.device
-            past_actions = torch.full((batch, 1), -1, device = device, dtype = torch.long)
+            past_actions = torch.full((batch, 1, self.num_action_sets), -1, device = device, dtype = torch.long)
 
         action_embed = self.past_actions_net(past_actions)
+
         state = cat((state, action_embed), dim = -1)
 
         logits = self.net(state)
-
-        if no_batch:
-            logits = rearrange(logits, '1 ... -> ...')
 
         return logits
 
@@ -653,17 +676,25 @@ class Actor(Module):
         actions,
         old_log_probs,
         advantages,
-        past_actions: Int['b na'] | None = None
+        past_actions: Int['b past a'] | None = None
     ):
         clip = self.eps_clip
+        advantages = rearrange(advantages, 'b -> b 1')
 
         logits = self.forward_net(state, past_actions)
 
-        prob = logits.softmax(dim = -1)
+        logits_per_action_set = logits.split(self.num_actions, dim = -1)
 
-        actions = gumbel_sample(logits, dim = -1)
+        probs = [t.softmax(dim = -1) for t in logits_per_action_set]
 
-        log_probs = get_log_prob(prob, actions, is_prob = True)
+        entropies = [calc_entropy(t) for t in probs]
+
+        probs = cat(probs, dim = -1)
+        entropies = stack(entropies, dim = -1)
+
+        indices = actions + self.action_offset
+
+        log_probs = log(probs).gather(-1, indices)
 
         ratios = (log_probs - old_log_probs).exp()
 
@@ -671,37 +702,56 @@ class Actor(Module):
 
         surr1 = ratios * advantages
         surr2 = ratios.clamp(1. - clip, 1. + clip) * advantages
-        loss = -torch.min(surr1, surr2) - self.beta_s * calc_entropy(prob)
+        loss = -torch.min(surr1, surr2) - self.beta_s * entropies
 
-        return loss.sum()
+        loss = reduce(loss, 'b a -> b', 'sum')
+        return loss.mean()
 
     def forward(
         self,
         state: Float['d'] | Float['b d'],
-        past_actions: Int['b na'] | Int['na'] | None = None,
+        past_actions: Int['b past a'] | Int['past a'] | None = None,
         sample = False,
-        sample_return_log_prob = True
+        sample_return_log_prob = True,
+        sample_temperature = 1.
     ):
-        if state.ndim == 1:
+        no_batch = state.ndim == 1
+
+        if no_batch:
             state = rearrange(state, 'd -> 1 d')
 
-            if exists(past_actions):
-                past_actions = rearrange(past_actions, '... -> 1 ...')
+        if exists(past_actions) and past_actions.ndim == 2:
+            past_actions = rearrange(past_actions, '... -> 1 ...')
 
         logits = self.forward_net(state, past_actions)
 
+        # split logits for multiple actions
+
+        logits_per_action_set = logits.split(self.num_actions, dim = -1)
+
+        probs = [t.softmax(dim = -1) for t in logits_per_action_set]
+
         if not sample:
-            prob = logits.softmax(dim = -1)
-            return prob
+            return probs
 
-        actions = gumbel_sample(logits, dim = -1)
+        actions = [gumbel_sample(t, temperature = sample_temperature, dim = -1) for t in logits_per_action_set]
 
-        log_prob = get_log_prob(logits, actions)
+        actions = stack(actions, dim = -1)
+
+        indices = actions + self.action_offset
+
+        probs = cat(probs, dim = -1)
+
+        log_probs = log(probs).gather(-1, indices)
+
+        if no_batch:
+            log_probs = rearrange(log_probs, '1 ... -> ...')
+            actions = rearrange(actions, '1 ... -> ...')
 
         if not sample_return_log_prob:
-            return sampled_actions
+            return actions
 
-        return actions, log_prob
+        return actions, log_probs
 
 # grouped mlp
 # for multiple critics in one forward pass
@@ -754,7 +804,7 @@ class Critics(Module):
         self,
         weights: tuple[float, ...],
         *,
-        num_actions: int,
+        num_actions: int | tuple[int, ...],
         dims: tuple[int, ...] = (512, 256),
         num_critics = 4,
         dim_action_embed = 16,
@@ -764,6 +814,10 @@ class Critics(Module):
 
         first_dim, *dims = dims
 
+        num_actions = cast_tuple(num_actions)
+
+        self.num_action_sets = len(num_actions)
+
         # critics can see the past actions as well
 
         self.past_actions_net = PastActionsNet(
@@ -772,7 +826,7 @@ class Critics(Module):
             past_action_conv_kernel
         )
 
-        first_dim += dim_action_embed
+        first_dim += self.past_actions_net.dim_all_actions
 
         # grouped mlp for the grouped critic scheme from boston university paper
 
@@ -814,7 +868,7 @@ class Critics(Module):
 
         if not exists(past_actions):
             batch, device = state.shape[0], state.device
-            past_actions = torch.full((batch, 1), -1, device = device, dtype = torch.long)
+            past_actions = torch.full((batch, 1, self.num_action_sets), -1, device = device, dtype = torch.long)
 
         past_actions_embed = self.past_actions_net(past_actions)
 
@@ -877,6 +931,7 @@ class Agent(Module):
     def __init__(
         self,
         *,
+        num_actions: int | tuple[int, ...],
         actor: dict,
         critics: dict,
         num_past_actions = 3,
@@ -897,11 +952,16 @@ class Agent(Module):
     ):
         super().__init__()
 
-        actor = Actor(**actor)
+        assert 'num_actions' not in actor
+        assert 'num_actions' not in critics
+
+        num_actions_kwarg = dict(num_actions = num_actions)
+
+        actor = Actor(**actor, **num_actions_kwarg)
 
         reward_shaper = RewardShapingWrapper(
             reward_config,
-            critics_kwargs = {**critics, 'num_actions': actor.num_actions},
+            critics_kwargs = {**critics, **num_actions_kwarg},
             reward_hparams = reward_hparams
         )
 
@@ -1006,8 +1066,7 @@ class Agent(Module):
 
         # prepare past actions
 
-        episode_num = dones.cumsum(dim = -1)
-        episode_num = F.pad(episode_num, (1, -1), value = 0)
+        episode_num = exclusive_cumsum(dones)
 
         actions = F.pad(actions, (0, 0, self.num_past_actions, 0), value = -1)
 
@@ -1016,11 +1075,11 @@ class Agent(Module):
         episode_num_with_past = F.pad(episode_num, (self.num_past_actions, 0), value = 0)
         episode_num_with_past = episode_num_with_past.unfold(0, self.num_past_actions + 1, 1)
 
-        actions_with_past = rearrange(actions_with_past, 't na past -> t past na')
+        actions_with_past = rearrange(actions_with_past, 't a past -> t past a')
 
         is_episode_overlap = episode_num[..., None] != episode_num_with_past
 
-        actions_with_past.masked_fill_(is_episode_overlap[..., None], -1)
+        actions_with_past = actions_with_past.masked_fill(is_episode_overlap[..., None], -1)
 
         # ready experience data
 
@@ -1042,9 +1101,7 @@ class Agent(Module):
                 values
             ) in dataloader:
 
-                past_actions, actions = actions_with_past[:, :-1], actions_with_past[:, -1]
-
-                past_actions = rearrange(past_actions, '... 1 -> ...')
+                past_actions, actions = actions_with_past[:, :-1, :], actions_with_past[:, -1, :]
 
                 critics_loss = self.critics(states, past_actions = past_actions, rewards = returns)
                 critics_loss.backward()
@@ -1107,7 +1164,8 @@ class Agent(Module):
 
                 # store past actions
 
-                past_actions = safe_cat(past_actions, actions)
+                past_action = rearrange(actions, '... -> 1 ...')
+                past_actions = safe_cat(past_actions, past_action, dim = 0)
 
                 # store memories
 
