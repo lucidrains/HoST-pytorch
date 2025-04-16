@@ -76,6 +76,9 @@ def safe_div(num, den, eps = 1e-8):
     den = den.clamp(min = eps) if is_tensor(den) else max(den, eps)
     return num / den
 
+def max_neg_value(t):
+    return -torch.finfo(t.dtype).max
+
 def calc_entropy(prob, eps = 1e-20, dim = -1):
     return -(prob * log(prob, eps)).sum(dim = dim)
 
@@ -100,20 +103,39 @@ def to_nested_tensor_and_inverse(tensors):
 
     return nt, inverse
 
-def nested_sum(z, lens: tuple[int, ...]):
+def nested_sum(t, lens: tuple[int, ...]):
     # needed as backwards not supported for sum with nested tensor
 
-    batch, device = z.shape[0], z.device
+    batch, device = t.shape[0], t.device
 
     lens = tensor(lens, device = device)
     indices = lens.cumsum(dim = -1) - 1
     indices = repeat(indices, 'n -> b n', b = batch)
 
-    cumsum = z.cumsum(dim = -1)
+    cumsum = t.cumsum(dim = -1)
     sum_at_indices = cumsum.gather(-1, indices)
     sum_at_indices = F.pad(sum_at_indices, (1, 0), value = 0.)
 
     return sum_at_indices[..., 1:] - sum_at_indices[..., :-1]
+
+def nested_argmax(t, lens: tuple[int, ...]):
+    batch, device = t.shape[0], t.device
+    arange = partial(torch.arange, device = device)
+
+    lens = tensor(lens, device = device)
+    boundaries = lens.cumsum(dim = -1)
+    boundaries = F.pad(boundaries, (1, 0), value = 0)
+
+    num_nested = len(lens)
+    seq = arange(t.shape[-1], device = device)
+    left_boundary, right_boundary = boundaries[:-1], boundaries[1:]
+
+    mask = einx.greater_equal('j, i -> i j', seq, left_boundary) & einx.less('j, i -> i j', seq, right_boundary)
+
+    t = repeat(t, 'b n -> b num_nested n', num_nested = lens.shape[0])
+    t = einx.where('num_nested n, b num_nested n,', mask, t, max_neg_value(t))
+
+    return t.argmax(dim = -1) - left_boundary
 
 # generalized advantage estimate
 
@@ -756,7 +778,8 @@ class Actor(Module):
         past_actions: Int['b past a'] | Int['past a'] | None = None,
         sample = False,
         sample_return_log_prob = True,
-        sample_temperature = 1.
+        sample_temperature = 1.,
+        use_nested_argmax = True
     ):
         no_batch = state.ndim == 1
 
@@ -782,9 +805,12 @@ class Actor(Module):
             return probs
 
         noised_logits = safe_div(logits, sample_temperature) + gumbel_noise(logits)
-        actions = tuple(t.argmax(dim = -1) for t in noised_logits.split(self.num_actions, dim = -1))
 
-        actions = stack(actions, dim = -1)
+        if use_nested_argmax:
+            actions = nested_argmax(noised_logits, self.num_actions)
+        else:
+            actions = tuple(t.argmax(dim = -1) for t in noised_logits.split(self.num_actions, dim = -1))
+            actions = stack(actions, dim = -1)
 
         indices = actions + self.action_offset
 
