@@ -17,6 +17,7 @@ import torch.nn.functional as F
 from torch.optim import Adam
 from torch.nn import Module, ModuleList, Linear
 from torch.utils.data import DataLoader, TensorDataset
+from torch.nn.utils.rnn import pad_sequence
 
 from hl_gauss_pytorch import HLGaussLoss
 
@@ -120,22 +121,14 @@ def nested_sum(t, lens: tuple[int, ...]):
 
 def nested_argmax(t, lens: tuple[int, ...]):
     batch, device = t.shape[0], t.device
-    arange = partial(torch.arange, device = device)
 
-    lens = tensor(lens, device = device)
-    boundaries = lens.cumsum(dim = -1)
-    boundaries = F.pad(boundaries, (1, 0), value = 0)
+    t = rearrange(t, 'b nl -> nl b')
+    split_tensors = t.split(lens, dim = 0)
 
-    num_nested = len(lens)
-    seq = arange(t.shape[-1], device = device)
-    left_boundary, right_boundary = boundaries[:-1], boundaries[1:]
+    padded_tensors = pad_sequence(split_tensors, batch_first = True, padding_value = max_neg_value(t))
+    padded_tensors = rearrange(padded_tensors, 'n l b -> b n l')
 
-    mask = einx.greater_equal('j, i -> i j', seq, left_boundary) & einx.less('j, i -> i j', seq, right_boundary)
-
-    t = repeat(t, 'b n -> b num_nested n', num_nested = lens.shape[0])
-    t = einx.where('num_nested n, b num_nested n,', mask, t, max_neg_value(t))
-
-    return t.argmax(dim = -1) - left_boundary
+    return padded_tensors.argmax(dim = -1)
 
 # generalized advantage estimate
 
