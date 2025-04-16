@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 import torch
 from torch.nested import nested_tensor
-from torch import nn, Tensor, tensor, cat, stack
+from torch import nn, Tensor, tensor, is_tensor, cat, stack
 import torch.nn.functional as F
 from torch.optim import Adam
 from torch.nn import Module, ModuleList, Linear
@@ -68,6 +68,10 @@ def log(t, eps = 1e-20):
 def is_empty(t):
     return t.numel() == 0
 
+def safe_div(num, den, eps = 1e-6):
+    den = den.clamp(min = eps) if is_tensor(den) else max(den, eps)
+    return num / den
+
 def exclusive_cumsum(t):
     t = t.cumsum(dim = -1)
     return F.pad(t, (1, -1), value = 0)
@@ -78,9 +82,6 @@ def calc_entropy(prob, eps = 1e-20, dim = -1):
 def gumbel_noise(t):
     noise = torch.rand_like(t)
     return -log(-log(noise))
-
-def gumbel_sample(t, temperature = 1., dim = -1):
-    return ((t / max(temperature, 1e-10)) + gumbel_noise(t)).argmax(dim = dim)
 
 # nested tensor related
 
@@ -780,7 +781,9 @@ class Actor(Module):
         if not sample:
             return probs
 
-        actions = [gumbel_sample(t, temperature = sample_temperature, dim = -1) for t in logits_per_action_set]
+        noised_logits = safe_div(logits, sample_temperature) + gumbel_noise(logits)
+
+        actions = [t.argmax(dim = -1) for t in noised_logits.split(self.num_actions, dim = -1)]
 
         actions = stack(actions, dim = -1)
 
