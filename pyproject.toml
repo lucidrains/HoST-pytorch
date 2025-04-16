@@ -1,6 +1,6 @@
 [project]
 name = "HoST-pytorch"
-version = "0.0.29"
+version = "0.0.30"
 description = "Humanoid Standing Up"
 authors = [
     { name = "Phil Wang", email = "lucidrains@gmail.com" }
@@ -31,7 +31,7 @@ dependencies = [
     "jaxtyping",
     "hl-gauss-pytorch>=0.1.19",
     "pydantic>=2.0",
-    "torch>=2.2",
+    "torch>=2.5",
     'tqdm'
 ]
 

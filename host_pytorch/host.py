@@ -11,6 +11,7 @@ from collections import namedtuple
 from tqdm import tqdm
 
 import torch
+from torch.nested import nested_tensor
 from torch import nn, Tensor, tensor, cat, stack
 import torch.nn.functional as F
 from torch.optim import Adam
@@ -75,11 +76,43 @@ def calc_entropy(prob, eps = 1e-20, dim = -1):
     return -(prob * log(prob, eps)).sum(dim = dim)
 
 def gumbel_noise(t):
-    noise = torch.zeros_like(t).uniform_(0, 1)
+    noise = torch.rand_like(t)
     return -log(-log(noise))
 
 def gumbel_sample(t, temperature = 1., dim = -1):
     return ((t / max(temperature, 1e-10)) + gumbel_noise(t)).argmax(dim = dim)
+
+# nested tensor related
+
+def to_nested_tensor_and_inverse(tensors):
+    jagged_dims = tuple(t.shape[-1] for t in tensors)
+
+    tensor = cat(tensors, dim = -1)
+    batch = tensor.shape[0]
+
+    tensor = rearrange(tensor, 'b n -> (b n)')
+    nt = nested_tensor(tensor.split(jagged_dims * batch), layout = torch.jagged, device = tensor.device, requires_grad = True)
+
+    def inverse(t):
+        t = cat(t.unbind())
+        return rearrange(t, '(b n) -> b n', b = batch)
+
+    return nt, inverse
+
+def nested_sum(z, lens: tuple[int, ...]):
+    # needed as backwards not supported for sum with nested tensor
+
+    batch, device = z.shape[0], z.device
+
+    lens = tensor(lens, device = device)
+    indices = lens.cumsum(dim = -1) - 1
+    indices = repeat(indices, 'n -> b n', b = batch)
+
+    cumsum = z.cumsum(dim = -1)
+    sum_at_indices = cumsum.gather(-1, indices)
+    sum_at_indices = F.pad(sum_at_indices, (1, 0), value = 0.)
+
+    return sum_at_indices[..., 1:] - sum_at_indices[..., :-1]
 
 # generalized advantage estimate
 
@@ -691,12 +724,15 @@ class Actor(Module):
 
         logits_per_action_set = logits.split(self.num_actions, dim = -1)
 
-        probs = [t.softmax(dim = -1) for t in logits_per_action_set]
+        nested_logits, inverse_nested = to_nested_tensor_and_inverse(logits_per_action_set)
 
-        entropies = [calc_entropy(t) for t in probs]
+        nested_probs = nested_logits.softmax(dim = -1)
 
-        probs = cat(probs, dim = -1)
-        entropies = stack(entropies, dim = -1)
+        probs = inverse_nested(nested_probs)
+
+        # entropy
+
+        entropies = nested_sum(-probs * log(probs), self.num_actions)
 
         indices = actions + self.action_offset
 
@@ -735,7 +771,11 @@ class Actor(Module):
 
         logits_per_action_set = logits.split(self.num_actions, dim = -1)
 
-        probs = [t.softmax(dim = -1) for t in logits_per_action_set]
+        nested_logits, inverse_nested = to_nested_tensor_and_inverse(logits_per_action_set)
+
+        nested_probs = nested_logits.softmax(dim = -1)
+
+        probs = inverse_nested(nested_probs)
 
         if not sample:
             return probs
@@ -745,8 +785,6 @@ class Actor(Module):
         actions = stack(actions, dim = -1)
 
         indices = actions + self.action_offset
-
-        probs = cat(probs, dim = -1)
 
         log_probs = log(probs).gather(-1, indices)
 
