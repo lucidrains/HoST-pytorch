@@ -49,6 +49,9 @@ def exists(v):
 def default(v, d):
     return v if exists(v) else d
 
+def first(arr):
+    return arr[0]
+
 def divisible_by(num, den):
     return (num % den) == 0
 
@@ -540,7 +543,22 @@ class RewardShapingWrapper(Module):
             **critics_kwargs
         )
 
-        # then store the weights of the individual reward shaping functions, per group
+        # default reward hyperparams, but can be overridden
+
+        if isinstance(reward_hparams, dict):
+            reward_hparams = HyperParams(**reward_hparams)
+
+        self.reward_hparams = reward_hparams
+
+        # initialize reward shaper based on config
+
+        self.init_reward_shaper(config)
+
+    def init_reward_shaper(
+        self,
+        config
+    ):
+        # store the weights of the individual reward shaping functions, per group
 
         num_reward_fns = [len(reward_group_fns) for _, _, reward_group_fns in config]
         self.split_dims = num_reward_fns
@@ -550,12 +568,20 @@ class RewardShapingWrapper(Module):
 
         self.reward_fns = [reward_fn for _, _, reward_group_fns in config for reward_fn, _ in reward_group_fns]
 
-        # default reward hyperparams, but can be overridden
+    def add_reward_function_(
+        self,
+        reward_fn: Callable,
+        group_name: str,
+        weight: float
+    ):
+        matched_reward_fns = [reward_fns for reward_group_name, _, reward_fns in self.config if reward_group_name == group_name]
 
-        if isinstance(reward_hparams, dict):
-            reward_hparams = HyperParams(**reward_hparams)
+        assert len(matched_reward_fns) == 1, f'no reward group {group_name}'
 
-        self.reward_hparams = reward_hparams
+        matched_reward_fns = first(matched_reward_fns)
+        matched_reward_fns.append((reward_fn, weight))
+
+        self.init_reward_shaper(self.config)
 
     def forward(
         self,
@@ -1055,6 +1081,18 @@ class Agent(Module):
             gamma = gae_gamma,
             lam = gae_lam,
             use_accelerated = calc_gae_use_accelerated
+        )
+
+    def add_reward_function_(
+        self,
+        reward_fn: Callable,
+        group_name: str,
+        weight: float
+    ):
+        self.state_to_reward.add_reward_function_(
+            reward_fn,
+            group_name,
+            weight
         )
 
     def save(

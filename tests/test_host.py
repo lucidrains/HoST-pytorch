@@ -76,6 +76,19 @@ def test_e2e(
         )
     )
 
+    # able to add some custom reward in addition to defaults
+
+    def custom_reward(state, hparam, past_actions = None):
+        return 5.
+
+    agent.add_reward_function_(
+        custom_reward,
+        group_name = 'regularization',
+        weight = 1e-5
+    )
+
+    # learning
+
     memories = agent(env)
 
     agent.learn(memories)
