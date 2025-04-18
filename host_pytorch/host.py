@@ -37,6 +37,8 @@ from einops.layers.torch import Rearrange, Reduce, EinMix as Mix
 # d - feature dimension
 # past - past actions
 
+from evolutionary_policy_optimization import LatentGenePool
+
 # constants
 
 INF = float('inf')

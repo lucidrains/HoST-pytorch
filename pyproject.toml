@@ -1,6 +1,6 @@
 [project]
 name = "HoST-pytorch"
-version = "0.0.37"
+version = "0.0.38"
 description = "Humanoid Standing Up"
 authors = [
     { name = "Phil Wang", email = "lucidrains@gmail.com" }
@@ -28,6 +28,7 @@ dependencies = [
     "assoc-scan",
     "einx>=0.3.0",
     "einops>=0.8.1",
+    "evolutionary-policy-optimization>=0.0.38",
     "jaxtyping",
     "hl-gauss-pytorch>=0.1.19",
     "pydantic>=2.0",
