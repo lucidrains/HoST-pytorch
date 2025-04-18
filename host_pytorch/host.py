@@ -1222,12 +1222,16 @@ class Agent(Module):
                 self.actor_optim.step()
                 self.actor_optim.zero_grad()
 
+    @torch.no_grad()
     def forward(
         self,
         env,
         reward_hparams: HyperParams | None = None
 
     ) -> Memories:
+
+        self.actor.eval()
+        self.critics.eval()
 
         memories = []
 
@@ -1259,13 +1263,9 @@ class Agent(Module):
 
                 actor_critic_past_actions = past_actions[-self.num_past_actions:] if exists(past_actions) else None
 
-                with torch.no_grad():
-                    self.actor.eval()
-                    self.critics.eval()
+                actions, log_probs = self.actor(state_tensor, sample = True, past_actions = actor_critic_past_actions)
 
-                    actions, log_probs = self.actor(state_tensor, sample = True, past_actions = actor_critic_past_actions)
-
-                    values = self.critics(state_tensor, past_actions = actor_critic_past_actions)
+                values = self.critics(state_tensor, past_actions = actor_critic_past_actions)
 
                 # store past actions
 
@@ -1293,10 +1293,7 @@ class Agent(Module):
 
                 timestep += 1
 
-        with torch.no_grad():
-            self.critics.eval()
-
-            state_tensor = state_to_tensor(state)
-            next_value = self.critics(state_tensor)
+        state_tensor = state_to_tensor(state)
+        next_value = self.critics(state_tensor)
 
         return Memories(memories, next_value)
