@@ -139,20 +139,21 @@ def nested_argmax(t, lens: tuple[int, ...]):
 
 def calc_target_and_gae(
     rewards: Float['g n'],
-    values: Float['g n+1'],
+    values: Float['g n'],
     masks: Bool['n'],
     gamma = 0.99,
     lam = 0.95,
     use_accelerated = None
 
 ):
-    assert values.shape[-1] == (rewards.shape[-1] + 1)
+    assert values.shape[-1] == rewards.shape[-1]
 
     use_accelerated = default(use_accelerated, rewards.is_cuda)
     device = rewards.device
 
     masks = repeat(masks, 'n -> g n', g = rewards.shape[0])
 
+    values = F.pad(values, (0, 1), value = 0.)
     values, values_next = values[:, :-1], values[:, 1:]
 
     delta = rewards + gamma * values_next * masks - values
@@ -1005,17 +1006,13 @@ class HierarchicalController(Module):
 # memories
 
 Memory = namedtuple('Memory', [
+    'learnable',
     'state',
     'actions',
     'old_log_probs',
     'rewards',
     'values',
     'done'
-])
-
-Memories = namedtuple('Memories', [
-    'memories',
-    'next_value'
 ])
 
 # agent - consisting of actor and critic
@@ -1142,13 +1139,12 @@ class Agent(Module):
 
     def learn(
         self,
-        memories_and_next_value: Memories,
+        memories: list[Memory]
     ):
-        memories, next_value = memories_and_next_value
-
         # stack all the memories across time
 
         (
+            learnable,
             states,
             actions,
             log_probs,
@@ -1160,11 +1156,11 @@ class Agent(Module):
         # calculating returns and generalized advantage estimate
 
         rewards = rearrange(rewards, '... g -> g ...')
+        values_for_gae = rearrange(values, 'n g -> g n')
 
-        values_with_next, _ = pack((values, next_value), '* g')
-        values_with_next = rearrange(values_with_next, '... g -> g ...')
+        boundaries = 1. - dones.float()
 
-        returns, gae = self.calc_target_and_gae(rewards, values_with_next, dones)
+        returns, gae = self.calc_target_and_gae(rewards, values_for_gae, boundaries)
 
         returns = rearrange(returns, 'g ... -> ... g')
         gae = rearrange(gae, 'g ... -> ... g')
@@ -1188,7 +1184,11 @@ class Agent(Module):
 
         # ready experience data
 
-        dataset = TensorDataset(states, actions_with_past, log_probs, returns, values)
+        data = (states, actions_with_past, log_probs, returns, values)
+
+        data = tuple(t[learnable] for t in data)
+
+        dataset = TensorDataset(*data)
 
         dataloader = DataLoader(dataset, batch_size = self.batch_size, shuffle = True)
 
@@ -1228,12 +1228,13 @@ class Agent(Module):
         env,
         reward_hparams: HyperParams | None = None
 
-    ) -> Memories:
+    ) -> list[Memory]:
 
         self.actor.eval()
         self.critics.eval()
 
         memories = []
+        memory = None
 
         for _ in tqdm(range(self.num_episodes), desc = 'episodes'):
 
@@ -1247,12 +1248,6 @@ class Agent(Module):
                 # State -> Float['state_dim']
 
                 state_tensor = state_to_tensor(state)
-
-                # done would be whether it is the last time step of the episode
-                # but can also have some termination condition based on the robot's internal state
-
-                done = timestep == (self.max_episode_timesteps - 1)
-                done = tensor(done, device = state_tensor.device)
 
                 # rewards are derived from the state
 
@@ -1275,12 +1270,13 @@ class Agent(Module):
                 # store memories
 
                 memory = Memory(
+                    learnable = tensor(True),
                     state = state_tensor,
                     actions = actions,
                     old_log_probs = log_probs,
                     rewards = rewards,
                     values = values,
-                    done = done
+                    done = tensor(False)
                 )
 
                 memories.append(memory)
@@ -1293,7 +1289,19 @@ class Agent(Module):
 
                 timestep += 1
 
+        # add a non-learnable memory
+
         state_tensor = state_to_tensor(state)
         next_value = self.critics(state_tensor)
 
-        return Memories(memories, next_value)
+        memory = memory._replace(
+            learnable = tensor(False),
+            values = next_value,
+            done = tensor(True)
+        )
+
+        memories.append(memory)
+
+        # return memories
+
+        return memories
