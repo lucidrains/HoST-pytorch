@@ -758,9 +758,14 @@ class Actor(Module):
         actions,
         old_log_probs,
         advantages,
-        past_actions: Int['b past a'] | None = None
+        past_actions: Int['b past a'] | None = None,
+        norm_eps = 1e-5
     ):
+        batch = advantages.shape[0]
+
         clip = self.eps_clip
+
+        advantages = F.layer_norm(advantages, (batch,), eps = norm_eps)
         advantages = rearrange(advantages, 'b -> b 1')
 
         logits = self.forward_net(state, past_actions)
