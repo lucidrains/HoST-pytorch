@@ -25,6 +25,10 @@ from assoc_scan import AssocScan
 
 from host_pytorch.tensor_typing import Float, Int, Bool
 
+# https://arxiv.org/html/2503.19037v1
+
+from evolutionary_policy_optimization import LatentGenePool
+
 # einstein notation related
 
 import einx
@@ -36,8 +40,6 @@ from einops.layers.torch import Rearrange, Reduce, EinMix as Mix
 # a - actions
 # d - feature dimension
 # past - past actions
-
-from evolutionary_policy_optimization import LatentGenePool
 
 # constants
 
@@ -159,13 +161,9 @@ def calc_target_and_gae(
     delta = rewards + gamma * values_next * masks - values
     gates = gamma * lam * masks
 
-    gates, delta = gates[..., :, None], delta[..., :, None]
-
     scan = AssocScan(reverse = True, use_accelerated = use_accelerated)
 
     gae = scan(gates, delta)
-
-    gae = gae[..., :, 0]
 
     returns = gae + values
 
