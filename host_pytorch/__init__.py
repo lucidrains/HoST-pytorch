@@ -9,6 +9,5 @@ from host_pytorch.host import (
 
 from host_pytorch.host import (
     RewardFunctionAndWeight,
-    RewardGroup,
-    validate_reward_config_
+    RewardGroup
 )

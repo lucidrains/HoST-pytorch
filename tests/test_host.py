@@ -87,6 +87,13 @@ def test_e2e(
         weight = 1e-5
     )
 
+    # able to delete a reward
+
+    agent.delete_reward_function_(
+        group_name = 'regularization',
+        reward_fn_name = 'custom_reward'
+    )
+
     # learning
 
     memories = agent(env)

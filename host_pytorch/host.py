@@ -6,7 +6,7 @@ from pydantic import BaseModel, TypeAdapter
 
 from pathlib import Path
 from dataclasses import dataclass, asdict
-from collections import namedtuple
+from collections import namedtuple, OrderedDict
 
 from tqdm import tqdm
 
@@ -61,6 +61,9 @@ def divisible_by(num, den):
 
 def cast_tuple(t):
     return (t,) if not isinstance(t, tuple) else t
+
+def is_unique_els(arr):
+    assert len(arr) == len(set(arr))
 
 def safe_cat(acc, el, dim = -1):
     if not exists(acc):
@@ -476,9 +479,24 @@ class RewardGroup(NamedTuple):
     weight: float
     reward: list[RewardFunctionAndWeight]
 
-def validate_reward_config_(config):
+def validate_reward_config_and_index_by_name(config):
     adapter = TypeAdapter(list[RewardGroup])
     adapter.validate_python(config)
+
+    indexed_config = OrderedDict()
+
+    for group_name, group_weight, reward_functions in config:
+        if group_name not in indexed_config:
+            indexed_config[group_name] = (OrderedDict(), group_weight)
+
+        indexed_group_rewards, _ = indexed_config[group_name]
+
+        for reward_function, weight in reward_functions:
+            reward_function_name = reward_function.__name__
+            assert reward_function_name not in indexed_group_rewards
+            indexed_group_rewards[reward_function_name] = (reward_function, weight)
+
+    return indexed_config
 
 DEFAULT_REWARD_CONFIG = [
     ('task', 2.5, [
@@ -488,13 +506,13 @@ DEFAULT_REWARD_CONFIG = [
     ('style', 1., [
         (reward_waist_yaw_deviation, -10),
         (reward_hip_roll_yaw_deviation, -10 / 10),
-        (reward_shoulder_roll_deviation, -0.25 / -10),
-        (reward_foot_displacement, -2.5),
-        (reward_ankle_parallel, 2.5 / 2.5),
-        (reward_foot_distance, 20),
-        (reward_foot_stumble, -10),
-        (reward_shank_orientation, 0 / -25), # do not understand this 0(G) / -25(PSW)
-        (reward_waist_yaw_deviation, 10),
+        (reward_knee_deviation, -0.25 / -10),
+        (reward_shoulder_roll_deviation, -2.5),
+        (reward_foot_displacement, 2.5 / 2.5),
+        (reward_ankle_parallel, 20),
+        (reward_foot_distance, -10),
+        (reward_foot_stumble, 0 / -25),
+        (reward_shank_orientation, 10), # do not understand this 0(G) / -25(PSW)
         (reward_base_angular_velocity, 1),
     ]),
     ('regularization', 0.1, [
@@ -529,14 +547,14 @@ class RewardShapingWrapper(Module):
 
         # use pydantic for validating the config and then store
 
-        validate_reward_config_(config)
+        config = validate_reward_config_and_index_by_name(config)
         self.config = config
 
         # based on the reward group config
         # can instantiate the critics automatically
 
         num_reward_groups = len(config)
-        critics_weights = [reward_group_weight for _, reward_group_weight, _ in config]
+        critics_weights = [reward_group_weight for _, reward_group_weight in config.values()]
 
         self.critics = Critics(
             critics_weights,
@@ -561,13 +579,14 @@ class RewardShapingWrapper(Module):
     ):
         # store the weights of the individual reward shaping functions, per group
 
-        num_reward_fns = [len(reward_group_fns) for _, _, reward_group_fns in config]
+        num_reward_fns = [len(reward_fns) for reward_fns, weight in config.values()]
+
         self.split_dims = num_reward_fns
 
-        reward_fn_weights = tensor([weight for _, _, reward_group_fns in config for _, weight in reward_group_fns])
+        reward_fn_weights = tensor([weight for reward_group_fns, _ in config.values() for _, weight in reward_group_fns.values()])
         self.register_buffer('reward_weights', reward_fn_weights)
 
-        self.reward_fns = [reward_fn for _, _, reward_group_fns in config for reward_fn, _ in reward_group_fns]
+        self.reward_fns = [reward_fn for reward_group_fns, _ in config.values() for reward_fn, _ in reward_group_fns.values()]
 
     def add_reward_function_(
         self,
@@ -575,12 +594,29 @@ class RewardShapingWrapper(Module):
         group_name: str,
         weight: float
     ):
-        matched_reward_fns = [reward_fns for reward_group_name, _, reward_fns in self.config if reward_group_name == group_name]
+        assert group_name in self.config
 
-        assert len(matched_reward_fns) == 1, f'no reward group {group_name}'
+        indexed_group_rewards, _ = self.config[group_name]
 
-        matched_reward_fns = first(matched_reward_fns)
-        matched_reward_fns.append((reward_fn, weight))
+        reward_fn_name = reward_fn.__name__
+        assert reward_fn_name not in indexed_group_rewards, f'reward function names must be unique'
+
+        indexed_group_rewards[reward_fn_name] = (reward_fn, weight)
+
+        self.init_reward_shaper(self.config)
+
+    def delete_reward_function_(
+        self,
+        group_name: str,
+        reward_fn_name: str
+    ):
+        assert group_name in self.config
+
+        indexed_group_rewards, _ = self.config[group_name]
+
+        assert reward_fn_name in indexed_group_rewards
+
+        del indexed_group_rewards[reward_fn_name]
 
         self.init_reward_shaper(self.config)
 
@@ -696,9 +732,10 @@ class Actor(Module):
         num_actions: int | tuple[int, ...],
         dims: tuple[int, ...] = (512, 256, 128),
         eps_clip = 0.2,
-        beta_s = .01,
+        entropy_weight = .01,
         dim_action_embed = 4,
         past_action_conv_kernel = 3,
+        norm_advantages = True
     ):
         super().__init__()
         assert not divisible_by(past_action_conv_kernel, 2)
@@ -732,7 +769,8 @@ class Actor(Module):
         # ppo loss related
 
         self.eps_clip = eps_clip
-        self.beta_s = beta_s
+        self.entropy_weight = entropy_weight
+        self.norm_advantages = norm_advantages
 
     def forward_net(
         self,
@@ -765,7 +803,9 @@ class Actor(Module):
 
         clip = self.eps_clip
 
-        advantages = F.layer_norm(advantages, (batch,), eps = norm_eps)
+        if self.norm_advantages:
+            advantages = F.layer_norm(advantages, (batch,), eps = norm_eps)
+
         advantages = rearrange(advantages, 'b -> b 1')
 
         logits = self.forward_net(state, past_actions)
@@ -792,7 +832,7 @@ class Actor(Module):
 
         surr1 = ratios * advantages
         surr2 = ratios.clamp(1. - clip, 1. + clip) * advantages
-        loss = -torch.min(surr1, surr2) - self.beta_s * entropies
+        loss = -torch.min(surr1, surr2) - self.entropy_weight * entropies
 
         loss = reduce(loss, 'b a -> b', 'sum')
         return loss.mean()
@@ -1095,6 +1135,16 @@ class Agent(Module):
             reward_fn,
             group_name,
             weight
+        )
+
+    def delete_reward_function_(
+        self,
+        group_name: str,
+        reward_fn_name: str
+    ):
+        self.state_to_reward.delete_reward_function_(
+            group_name,
+            reward_fn_name
         )
 
     def save(
