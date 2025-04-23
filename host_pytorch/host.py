@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import partial
+from itertools import zip_longest
 from typing import Iterable, NamedTuple, Callable
 from pydantic import BaseModel, TypeAdapter
 
@@ -55,6 +56,9 @@ def default(v, d):
 
 def first(arr):
     return arr[0]
+
+def xnor(x, y):
+    return not (x ^ y)
 
 def divisible_by(num, den):
     return (num % den) == 0
@@ -661,13 +665,19 @@ class MLP(Module):
 
     def forward(
         self,
-        x
+        x,
+        cond = None
     ):
 
-        for ind, layer in enumerate(self.layers, start = 1):
+        cond = default(cond, (None,))
+
+        for ind, (layer, layer_cond) in enumerate(zip_longest(self.layers, cond), start = 1):
             is_last = ind == len(self.layers)
 
             x = layer(x)
+
+            if exists(layer_cond):
+                x = x * layer_cond
 
             if not is_last:
                 x = F.silu(x)
@@ -734,6 +744,7 @@ class Actor(Module):
         eps_clip = 0.2,
         entropy_weight = .01,
         dim_action_embed = 4,
+        dim_latent = None,
         past_action_conv_kernel = 3,
         norm_advantages = True
     ):
@@ -758,6 +769,19 @@ class Actor(Module):
         offset = exclusive_cumsum(tensor(num_actions))
         self.register_buffer('action_offset', offset)
 
+        # latents
+
+        has_latent = exists(dim_latent)
+
+        self.has_latent = has_latent
+        self.latent_output_split_dims = dims
+
+        if has_latent:
+            self.to_conditioning = nn.Sequential(
+                nn.Linear(dim_latent, sum(dims)),
+                nn.SiLU()
+            )
+
         # backbone mlp
 
         first_state_dim += self.past_actions_net.dim_all_actions
@@ -775,8 +799,19 @@ class Actor(Module):
     def forward_net(
         self,
         state,
-        past_actions: Int['b past a'] | None = None
+        past_actions: Int['b past a'] | None = None,
+        latents: Float['d'] | Float['b d'] | None = None,
     ):
+
+        assert xnor(self.has_latent, exists(latents))
+
+        mlp_conds = None
+
+        if self.has_latent:
+            if latents.ndim == 1:
+                latents = repeat(latents, 'd -> b d', b = state.shape[0])
+
+            mlp_conds = self.to_conditioning(latents).split(self.latent_output_split_dims, dim = -1)
 
         if not exists(past_actions):
             batch, device = state.shape[0], state.device
@@ -786,7 +821,7 @@ class Actor(Module):
 
         state = cat((state, action_embed), dim = -1)
 
-        logits = self.net(state)
+        logits = self.net(state, cond = mlp_conds)
 
         return logits
 
@@ -796,6 +831,7 @@ class Actor(Module):
         actions,
         old_log_probs,
         advantages,
+        latents = None,
         past_actions: Int['b past a'] | None = None,
         norm_eps = 1e-5
     ):
@@ -808,7 +844,7 @@ class Actor(Module):
 
         advantages = rearrange(advantages, 'b -> b 1')
 
-        logits = self.forward_net(state, past_actions)
+        logits = self.forward_net(state, past_actions, latents = latents)
 
         logits_per_action_set = logits.split(self.num_actions, dim = -1)
 
@@ -840,6 +876,7 @@ class Actor(Module):
     def forward(
         self,
         state: Float['d'] | Float['b d'],
+        latents = None,
         past_actions: Int['b past a'] | Int['past a'] | None = None,
         sample = False,
         sample_return_log_prob = True,
@@ -854,7 +891,7 @@ class Actor(Module):
         if exists(past_actions) and past_actions.ndim == 2:
             past_actions = rearrange(past_actions, '... -> 1 ...')
 
-        logits = self.forward_net(state, past_actions)
+        logits = self.forward_net(state, past_actions, latents = latents)
 
         # split logits for multiple actions
 
@@ -921,13 +958,19 @@ class GroupedMLP(Module):
 
     def forward(
         self,
-        x
+        x,
+        cond = None
     ):
 
-        for ind, layer in enumerate(self.layers, start = 1):
+        cond = default(cond, (None,))
+
+        for ind, (layer, layer_cond) in enumerate(zip_longest(self.layers, cond), start = 1):
             is_last = ind == len(self.layers)
 
             x = layer(x)
+
+            if exists(layer_cond):
+                x = x * layer_cond
 
             if not is_last:
                 x = F.silu(x)
@@ -945,6 +988,7 @@ class Critics(Module):
         dims: tuple[int, ...] = (512, 256),
         num_critics = 4,
         dim_action_embed = 16,
+        dim_latent = None,
         past_action_conv_kernel = 3
     ):
         super().__init__()
@@ -954,6 +998,20 @@ class Critics(Module):
         num_actions = cast_tuple(num_actions)
 
         self.num_action_sets = len(num_actions)
+
+        # latents
+
+        has_latent = exists(dim_latent)
+
+        self.has_latent = has_latent
+        self.latent_output_split_dims = dims
+
+        if has_latent:
+            self.to_conditioning = nn.Sequential(
+                nn.Linear(dim_latent, num_critics * sum(dims)),
+                nn.SiLU(),
+                Rearrange('... (num_critics d) -> ... num_critics d', num_critics = num_critics)
+            )
 
         # critics can see the past actions as well
 
@@ -995,13 +1053,31 @@ class Critics(Module):
         state: Float['d'] | Float['b d'],
         rewards: Float['b g'] | None = None,
         past_actions: Int['b past a'] | Int['past a'] | None = None,
+        latents: Float['d'] | Float['b d'] | None = None
     ):
+
+        # handle no batch
+
         no_batch = state.ndim == 1
 
         if no_batch:
             state = rearrange(state, 'd -> 1 d')
             if exists(past_actions):
                 past_actions = rearrange(past_actions, '... -> 1 ...')
+
+        # latents
+
+        assert xnor(self.has_latent, exists(latents))
+
+        mlp_conds = None
+
+        if self.has_latent:
+            if latents.ndim == 1:
+                latents = repeat(latents, 'd -> b d', b = state.shape[0])
+
+            mlp_conds = self.to_conditioning(latents).split(self.latent_output_split_dims, dim = -1)
+
+        # handle past actions
 
         if not exists(past_actions):
             batch, device = state.shape[0], state.device
@@ -1011,7 +1087,7 @@ class Critics(Module):
 
         state = cat((state, past_actions_embed), dim = -1)
 
-        values = self.mlps(state)
+        values = self.mlps(state, cond = mlp_conds)
         values = rearrange(values, '... 1 -> ...')
 
         if no_batch:

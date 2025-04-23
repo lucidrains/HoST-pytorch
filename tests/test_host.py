@@ -11,6 +11,7 @@ from host_pytorch.host import (
     RewardShapingWrapper,
     HyperParams,
     Agent,
+    LatentGenePool
 )
 
 from host_pytorch.mock_env import Env, mock_hparams
@@ -101,3 +102,41 @@ def test_e2e(
     agent.learn(memories)
 
     agent.save('./standing-up-policy.pt', overwrite = True)
+
+def test_actor_critic_with_latents():
+    latent_gene_pool = LatentGenePool(
+        num_latents = 8,
+        dim_latent = 64
+    )
+
+    actor = Actor(
+        4,
+        dim_action_embed = 4,
+        past_action_conv_kernel = 3,
+        dim_latent = 64
+    )
+
+    state = torch.randn(4, 512)
+    latent = latent_gene_pool(latent_id = 4)
+
+    actions, log_prob = actor(
+        state,
+        latents = latent,
+        past_actions = torch.randint(0, 4, (4, 2, 1)),
+        sample = True
+    )
+
+    critics = Critics(
+        [1., 2.],
+        num_critics = 2,
+        num_actions = 4,
+        dim_latent = 64
+    )
+
+    loss = critics(
+        state,
+        latents = latent,
+        rewards = torch.randn(4, 2)
+    )
+
+    loss.backward()
