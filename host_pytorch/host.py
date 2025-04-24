@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from random import choice
 from functools import partial
 from itertools import zip_longest
 from typing import Iterable, NamedTuple, Callable
@@ -1157,7 +1158,8 @@ class Agent(Module):
         gae_lam = 0.95,
         calc_gae_use_accelerated = None,
         epochs = 2,
-        batch_size = 16
+        batch_size = 16,
+        env_hparams: list | None = None
     ):
         super().__init__()
 
@@ -1191,6 +1193,10 @@ class Agent(Module):
 
         self.num_episodes = num_episodes
         self.max_episode_timesteps = max_episode_timesteps
+
+        # domain randomization related
+
+        self.env_hparams = env_hparams
 
         # calculating gae
 
@@ -1356,7 +1362,6 @@ class Agent(Module):
         self,
         env,
         reward_hparams: HyperParams | None = None
-
     ) -> list[Memory]:
 
         self.actor.eval()
@@ -1368,7 +1373,13 @@ class Agent(Module):
         for _ in tqdm(range(self.num_episodes), desc = 'episodes'):
 
             timestep = 0
-            state = env.reset()
+
+            env_reset_kwargs = dict()
+            if exists(self.env_hparams):
+                env_hparam = choice(self.env_params)
+                env_reset_kwargs.update(env_hparam = env_hparam)
+
+            state = env.reset(**env_reset_kwargs)
 
             past_actions = None
 

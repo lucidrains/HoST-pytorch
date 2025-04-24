@@ -85,7 +85,8 @@ class Env(Module):
         return self.dummy.device
 
     def reset(
-        self
+        self,
+        env_hparams = dict(),
     ) -> State:
         return random_state()
 
