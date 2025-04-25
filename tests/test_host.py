@@ -105,7 +105,7 @@ def test_e2e(
 
 def test_actor_critic_with_latents():
     latent_gene_pool = LatentGenePool(
-        num_latents = 8,
+        num_latents = 32,
         dim_latent = 64
     )
 
