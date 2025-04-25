@@ -1147,6 +1147,8 @@ class Agent(Module):
         num_past_actions = 3,
         actor_lr = 1e-4,
         critics_lr = 1e-4,
+        actor_weight_decay = 1e-3,
+        critics_weight_decay = 1e-3,
         actor_optim_kwargs: dict = dict(),
         critics_optim_kwargs: dict = dict(),
         optim_klass = Adam,
@@ -1181,8 +1183,8 @@ class Agent(Module):
 
         self.state_to_reward = reward_shaper
 
-        self.actor_optim = optim_klass(self.actor.parameters(), lr = actor_lr, **actor_optim_kwargs)
-        self.critics_optim = optim_klass(self.critics.parameters(), lr = critics_lr, **critics_optim_kwargs)
+        self.actor_optim = optim_klass(self.actor.parameters(), lr = actor_lr, weight_decay = actor_weight_decay, **actor_optim_kwargs)
+        self.critics_optim = optim_klass(self.critics.parameters(), lr = critics_lr, weight_decay = critics_weight_decay, **critics_optim_kwargs)
 
         self.num_past_actions = num_past_actions
 
