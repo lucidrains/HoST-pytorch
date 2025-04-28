@@ -29,7 +29,7 @@ def test_actor_critic_reward_shaper():
 
     critics = Critics([1., 2.], num_critics = 2, num_actions = 4)
 
-    loss = critics(state, rewards = torch.randn(4, 2))
+    loss = critics.forward_for_loss(state, rewards = torch.randn(4, 2), old_values = torch.randn(4, 2))
     loss.backward()
 
     values = critics(state)
@@ -133,10 +133,11 @@ def test_actor_critic_with_latents():
         dim_latent = 64
     )
 
-    loss = critics(
+    loss = critics.forward_for_loss(
         state,
         latents = latent,
-        rewards = torch.randn(4, 2)
+        rewards = torch.randn(4, 2),
+        old_values = torch.randn(4, 2)
     )
 
     loss.backward()

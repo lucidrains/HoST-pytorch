@@ -990,7 +990,8 @@ class Critics(Module):
         num_critics = 4,
         dim_action_embed = 16,
         dim_latent = None,
-        past_action_conv_kernel = 3
+        past_action_conv_kernel = 3,
+        value_eps_clip = 0.4
     ):
         super().__init__()
 
@@ -1033,6 +1034,10 @@ class Critics(Module):
         assert len(weights) == num_critics
         self.register_buffer('weights', tensor(weights))
 
+        # value clip eps
+
+        self.value_eps_clip = value_eps_clip
+
     @torch.no_grad()
     def calc_advantages(
         self,
@@ -1049,10 +1054,27 @@ class Critics(Module):
         weighted_norm_advantages = einx.multiply('g b, g', norm_advantages, self.weights)
         return reduce(weighted_norm_advantages, 'g b -> b', 'sum')
 
+    def forward_for_loss(
+        self,
+        state: Float['d'] | Float['b d'],
+        old_values: Float['b g'],
+        rewards: Float['b g'],
+        past_actions: Int['b past a'] | Int['past a'] | None = None,
+        latents: Float['d'] | Float['b d'] | None = None,
+    ):
+        eps = self.value_eps_clip
+        values = self.forward(state = state, past_actions = past_actions, latents = latents)
+
+        clipped_value = old_values + (values - old_values).clamp(-eps, eps)
+
+        loss = F.mse_loss(values, rewards, reduction = 'none')
+        clipped_loss = F.mse_loss(clipped_value, rewards, reduction = 'none')
+
+        return torch.max(loss, clipped_loss).mean()
+
     def forward(
         self,
         state: Float['d'] | Float['b d'],
-        rewards: Float['b g'] | None = None,
         past_actions: Int['b past a'] | Int['past a'] | None = None,
         latents: Float['d'] | Float['b d'] | None = None
     ):
@@ -1094,10 +1116,7 @@ class Critics(Module):
         if no_batch:
             values = rearrange(values, '1 ... -> ...')
 
-        if not exists(rewards):
-            return values
-
-        return F.mse_loss(rewards, values)
+        return values
 
 # hierarchical controller
 
@@ -1299,8 +1318,8 @@ class Agent(Module):
 
         returns, gae = self.calc_target_and_gae(rewards, values_for_gae, boundaries)
 
-        returns = rearrange(returns, 'g ... -> ... g')
-        gae = rearrange(gae, 'g ... -> ... g')
+        returns = rearrange(returns, 'g ... -> ... g').detach()
+        gae = rearrange(gae, 'g ... -> ... g').detach()
 
         # prepare past actions
 
@@ -1345,7 +1364,7 @@ class Agent(Module):
 
                 past_actions, actions = actions_with_past[:, :-1, :], actions_with_past[:, -1, :]
 
-                critics_loss = self.critics(states, past_actions = past_actions, rewards = returns)
+                critics_loss = self.critics.forward_for_loss(states, past_actions = past_actions, old_values = values, rewards = returns)
                 critics_loss.backward()
 
                 self.critics_optim.step()
