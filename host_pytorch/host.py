@@ -5,8 +5,8 @@ from functools import partial
 from itertools import zip_longest
 
 from types import SimpleNamespace
-from typing import Iterable, NamedTuple, Callable
-from pydantic import BaseModel, TypeAdapter
+from typing import NamedTuple, Callable
+from pydantic import BaseModel
 
 from pathlib import Path
 from dataclasses import dataclass, asdict
@@ -24,6 +24,8 @@ from torch.utils.data import DataLoader, TensorDataset
 from torch.nn.utils.rnn import pad_sequence
 
 from hl_gauss_pytorch import HLGaussLoss
+
+from torch_einops_utils import pad_at_dim, exclusive_cumsum, pack_with_inverse
 
 from assoc_scan import AssocScan
 
@@ -68,6 +70,9 @@ def divisible_by(num, den):
 
 def cast_tuple(t):
     return (t,) if not isinstance(t, tuple) else t
+
+def cast_tensor(t):
+    return t if is_tensor(t) else tensor(t)
 
 def is_unique_els(arr):
     assert len(arr) == len(set(arr))
@@ -161,11 +166,10 @@ def calc_target_and_gae(
     assert values.shape[-1] == rewards.shape[-1]
 
     use_accelerated = default(use_accelerated, rewards.is_cuda)
-    device = rewards.device
 
     masks = repeat(masks, 'n -> g n', g = rewards.shape[0])
 
-    values = F.pad(values, (0, 1), value = 0.)
+    values = pad_at_dim(values, (0, 1), value = 0., dim = -1)
     values, values_next = values[:, :-1], values[:, 1:]
 
     delta = rewards + gamma * values_next * masks - values
@@ -178,6 +182,25 @@ def calc_target_and_gae(
     returns = gae + values
 
     return returns, gae
+
+# aux loss related
+
+# L2C2 smoothness regularization (section IV-D2 in paper)
+# https://arxiv.org/abs/2202.07152
+
+def l2c2_smoothness_loss(
+    forward_fn: Callable[[Tensor], Tensor],
+    state: Tensor,
+    next_state: Tensor,
+    outputs: Tensor
+) -> Tensor:
+
+    frac = torch.rand_like(state)
+    interp_state = state.lerp(next_state, frac)
+
+    interp_outputs = forward_fn(interp_state)
+
+    return F.mse_loss(outputs.float(), interp_outputs.float())
 
 # === reward functions === table 6 - they have a mistake where they redefine ankle parallel reward twice
 
@@ -267,12 +290,15 @@ def ftol(
     margin = 0.,
     value_at_margin = 0.1
 ):
+    device = value.device
+
     low, high = bounds
 
     assert low < high, 'invalid bounds'
     assert margin >= 0., 'margin must be greater equal to 0.'
 
-    in_bounds = low <= value <= high
+    ones = value.new_ones(())
+    in_bounds = (value >= low) & (value <= high)
 
     if margin == 0.:
         return in_bounds.float()
@@ -281,8 +307,10 @@ def ftol(
 
     distance_margin = torch.where(value < low, low - value, value - high) / margin
 
-    scale = torch.sqrt(-2 * tensor(value_at_margin).log())
-    return (-0.5 * (distance_margin * scale).pow(2)).exp()
+    scale = torch.sqrt(-2 * tensor(value_at_margin, device = device).log())
+    value_outside_margin = (-0.5 * (distance_margin * scale).pow(2)).exp()
+
+    return torch.where(in_bounds, ones, value_outside_margin)
 
 # task rewards - It specifies the high-level task objectives.
 
@@ -291,7 +319,7 @@ def reward_head_height(state: State, hparam: HyperParams, derived_state: SimpleN
 
     return ftol(state.head_height, (1., INF), 1., 0.1)
 
-def reward_base_orientation(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
+def reward_task_base_orientation(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
     """ The orientation of the robot base represented by projected gravity vector. """
 
     θz_base = state.projected_gravity_vector
@@ -345,7 +373,7 @@ def reward_ankle_parallel(state: State, hparam: HyperParams, derived_state: Simp
 
     ankle_is_parallel = ((var(left_qz) + var(right_qz)) * 0.5) < hparam.ankle_parallel_thres
 
-    return ankle_is_parallel.float()
+    return ankle_is_parallel
 
 def reward_foot_distance(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
     """ It penalizes a far distance between feet. """
@@ -357,7 +385,7 @@ def reward_foot_stumble(state: State, hparam: HyperParams, derived_state: Simple
 
     Fxy, Fz = state.contact_force[:-2], state.contact_force[-1]
 
-    return (Fxy > hparam.contact_force_ratio_is_foot_stumble * Fz).any().float()
+    return (Fxy > hparam.contact_force_ratio_is_foot_stumble * Fz).any()
 
 def reward_shank_orientation(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
     """ It encourages the left/right shank to be perpendicular to the ground. """
@@ -366,7 +394,7 @@ def reward_shank_orientation(state: State, hparam: HyperParams, derived_state: S
 
     return ftol(θlr, (0.8, INF), 1., 0.1) * derived_state.past_stage1
 
-def reward_base_angular_velocity(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
+def reward_style_base_angular_velocity(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
     """ It encourages low angular velocity of the during rising up. """
 
     angular_velocity_base = state.angular_velocity[:2]
@@ -387,7 +415,7 @@ def reward_action_rate(state: State, hparam: HyperParams, derived_state: SimpleN
         return tensor(0.)
 
     prev_action, curr_action = past_actions[-2:]
-    return (prev_action - curr_action).norm().pow(2)
+    return (prev_action.float() - curr_action.float()).norm().pow(2)
 
 def reward_smoothness(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
     """ It penalizes the discrepancy between consecutive actions. """
@@ -396,7 +424,7 @@ def reward_smoothness(state: State, hparam: HyperParams, derived_state: SimpleNa
         return tensor(0.)
 
     prev_prev_action, prev_action, curr_action = past_actions[-3:]
-    return (curr_action - 2 * prev_action + prev_prev_action).norm().pow(2)
+    return (curr_action.float() - 2 * prev_action.float() + prev_prev_action.float()).norm().pow(2)
 
 def reward_torques(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
     """ It penalizes the high joint torques. """
@@ -434,24 +462,24 @@ def reward_joint_vel_limits(state: State, hparam: HyperParams, derived_state: Si
 
 # post task reward - It specifies the desired behaviors after a successful standing up.
 
-def reward_base_angular_velocity(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
+def reward_post_task_base_angular_velocity(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
     """ It encourages low angular velocity of robot base after standing up. """
 
     angular_velocity_base = state.angular_velocity[:2]
 
-    return derived_state.past_stage2 * angular_velocity_base.norm().mul(-2).exp()
+    return derived_state.past_stage2 * angular_velocity_base.norm().pow(2).mul(-2).exp()
 
 def reward_base_linear_velocity(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
     """ It encourages low linear velocity of robot base after standing up. """
 
     linear_velocity_base = state.linear_velocity[:2]
-    return derived_state.past_stage2 * linear_velocity_base.norm().mul(-2).exp()
+    return derived_state.past_stage2 * linear_velocity_base.norm().pow(2).mul(-2).exp()
 
-def reward_base_orientation(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
+def reward_post_task_base_orientation(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
     """ It encourages the robot base to be perpendicular to the ground. """
 
     orientation_base = state.orientation[:2]
-    return derived_state.past_stage2 * orientation_base.norm().mul(-2).exp()
+    return derived_state.past_stage2 * orientation_base.norm().pow(2).mul(-2).exp()
 
 def reward_base_height(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
     """ It encourages the robot base to reach a target height. """
@@ -461,12 +489,12 @@ def reward_base_height(state: State, hparam: HyperParams, derived_state: SimpleN
 def reward_upper_body_posture(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
     """ It encourages the robot to track a target upper body postures. """
 
-    return derived_state.past_stage2 * (state.upper_body_posture - hparam.upper_body_posture_target).norm().mul(-1.).pow(2)
+    return derived_state.past_stage2 * (state.upper_body_posture - hparam.upper_body_posture_target).norm().pow(2).mul(-1.).exp()
 
 def reward_feet_parallel(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
     """ In encourages the feet to be parallel to each other. """
 
-    return derived_state.past_stage2 * (state.left_feet_height - state.right_feet_height).abs().clamp(min = hparam.feet_parallel_min_height_diff).mul(-20.)
+    return derived_state.past_stage2 * (state.left_feet_height - state.right_feet_height).abs().clamp(min = hparam.feet_parallel_min_height_diff).mul(-20.).exp()
 
 # reward config with all the weights
 
@@ -511,7 +539,7 @@ DEFAULT_REWARD_SHAPING_CONFIG = dict(
     reward_groups = [
         ('task', 2.5, [
             (reward_head_height, 1),
-            (reward_base_orientation, 1),
+            (reward_task_base_orientation, 1),
         ]),
         ('style', 1., [
             (reward_waist_yaw_deviation, -10),
@@ -523,7 +551,7 @@ DEFAULT_REWARD_SHAPING_CONFIG = dict(
             (reward_foot_distance, -10),
             (reward_foot_stumble, 0 / -25),
             (reward_shank_orientation, 10), # do not understand this 0(G) / -25(PSW)
-            (reward_base_angular_velocity, 1),
+            (reward_style_base_angular_velocity, 1),
         ]),
         ('regularization', 0.1, [
             (reward_joint_acceleration, -2.5e-7),
@@ -537,9 +565,9 @@ DEFAULT_REWARD_SHAPING_CONFIG = dict(
             (reward_joint_vel_limits, -1.),
         ]),
         ('post_task', 1, [
-            (reward_base_angular_velocity, 10),
+            (reward_post_task_base_angular_velocity, 10),
             (reward_base_linear_velocity, 10),
-            (reward_base_orientation, 10),
+            (reward_post_task_base_orientation, 10),
             (reward_base_height, 10),
             (reward_upper_body_posture, 10),
             (reward_feet_parallel, 2.5),
@@ -656,7 +684,7 @@ class RewardShapingWrapper(Module):
 
         # compute all rewards from all functions
 
-        rewards = tensor([reward_fn(state, reward_hparams, derived_state) for reward_fn in self.reward_fns])
+        rewards = stack([cast_tensor(reward_fn(state, reward_hparams, derived_state)).float() for reward_fn in self.reward_fns])
 
         weighted_rewards = rewards * self.reward_weights
 
@@ -767,7 +795,8 @@ class Actor(Module):
         dim_action_embed = 4,
         dim_latent = None,
         past_action_conv_kernel = 3,
-        norm_advantages = True
+        norm_advantages = True,
+        l2c2_smoothness_weight = 1.0
     ):
         super().__init__()
         assert not divisible_by(past_action_conv_kernel, 2)
@@ -817,6 +846,13 @@ class Actor(Module):
         self.entropy_weight = entropy_weight
         self.norm_advantages = norm_advantages
 
+        # l2c2 smoothness loss
+
+        self.l2c2_smoothness_weight = l2c2_smoothness_weight
+        self.has_l2c2 = l2c2_smoothness_weight > 0.
+
+        self.register_buffer('zero', tensor(0.), persistent = False)
+
     def forward_net(
         self,
         state,
@@ -848,13 +884,15 @@ class Actor(Module):
 
     def forward_for_loss(
         self,
-        state,
-        actions,
-        old_log_probs,
-        advantages,
+        state: Float['b d'],
+        actions: Int['b a'],
+        old_log_probs: Float['b a'],
+        advantages: Float['b'],
+        next_state: Float['b d'] | None = None,
         latents = None,
         past_actions: Int['b past a'] | None = None,
-        norm_eps = 1e-5
+        norm_eps = 1e-5,
+        return_loss_breakdown = False
     ):
         batch = advantages.shape[0]
 
@@ -889,10 +927,26 @@ class Actor(Module):
 
         surr1 = ratios * advantages
         surr2 = ratios.clamp(1. - clip, 1. + clip) * advantages
-        loss = -torch.min(surr1, surr2) - self.entropy_weight * entropies
+        ppo_loss = -torch.min(surr1, surr2) - self.entropy_weight * entropies
 
-        loss = reduce(loss, 'b a -> b', 'sum')
-        return loss.mean()
+        ppo_loss = reduce(ppo_loss, 'b a -> b', 'sum').mean()
+
+        # l2c2 smoothness regularization
+
+        l2c2_loss = self.zero
+
+        if self.has_l2c2 and exists(next_state):
+            forward_actions = lambda s: self.forward(s, sample = True, sample_return_log_prob = False, past_actions = past_actions, latents = latents)
+            l2c2_loss = l2c2_smoothness_loss(forward_actions, state, next_state, actions)
+
+        # return losses
+
+        total_loss = ppo_loss + self.l2c2_smoothness_weight * l2c2_loss
+
+        if not return_loss_breakdown:
+            return total_loss
+
+        return total_loss, (ppo_loss, l2c2_loss)
 
     def forward(
         self,
@@ -904,10 +958,7 @@ class Actor(Module):
         sample_temperature = 1.,
         use_nested_argmax = True
     ):
-        no_batch = state.ndim == 1
-
-        if no_batch:
-            state = rearrange(state, 'd -> 1 d')
+        state, inverse_pack = pack_with_inverse(state, '* d')
 
         if exists(past_actions) and past_actions.ndim == 2:
             past_actions = rearrange(past_actions, '... -> 1 ...')
@@ -925,7 +976,7 @@ class Actor(Module):
         probs = inverse_nested(nested_probs)
 
         if not sample:
-            return probs
+            return inverse_pack(probs)
 
         noised_logits = safe_div(logits, sample_temperature) + gumbel_noise(logits)
 
@@ -939,9 +990,8 @@ class Actor(Module):
 
         log_probs = log(probs).gather(-1, indices)
 
-        if no_batch:
-            log_probs = rearrange(log_probs, '1 ... -> ...')
-            actions = rearrange(actions, '1 ... -> ...')
+        actions = inverse_pack(actions)
+        log_probs = inverse_pack(log_probs)
 
         if not sample_return_log_prob:
             return actions
@@ -1011,7 +1061,8 @@ class Critics(Module):
         dim_action_embed = 16,
         dim_latent = None,
         past_action_conv_kernel = 3,
-        value_eps_clip = 0.4
+        value_eps_clip = 0.4,
+        l2c2_smoothness_weight = 0.1
     ):
         super().__init__()
 
@@ -1058,6 +1109,13 @@ class Critics(Module):
 
         self.value_eps_clip = value_eps_clip
 
+        # l2c2 smoothness loss
+
+        self.l2c2_smoothness_weight = l2c2_smoothness_weight
+        self.has_l2c2 = l2c2_smoothness_weight > 0.
+
+        self.register_buffer('zero', tensor(0.), persistent = False)
+
     @torch.no_grad()
     def calc_advantages(
         self,
@@ -1079,8 +1137,10 @@ class Critics(Module):
         state: Float['d'] | Float['b d'],
         old_values: Float['b g'],
         rewards: Float['b g'],
+        next_state: Float['b d'] | None = None,
         past_actions: Int['b past a'] | Int['past a'] | None = None,
         latents: Float['d'] | Float['b d'] | None = None,
+        return_loss_breakdown = False
     ):
         eps = self.value_eps_clip
         values = self.forward(state = state, past_actions = past_actions, latents = latents)
@@ -1090,7 +1150,24 @@ class Critics(Module):
         loss = F.mse_loss(values, rewards, reduction = 'none')
         clipped_loss = F.mse_loss(clipped_value, rewards, reduction = 'none')
 
-        return torch.max(loss, clipped_loss).mean()
+        critic_loss = torch.max(loss, clipped_loss).mean()
+
+        # l2c2 smoothness regularization
+
+        l2c2_loss = self.zero
+
+        if self.has_l2c2 and exists(next_state):
+            forward_values = lambda s: self.forward(s, past_actions = past_actions, latents = latents)
+            l2c2_loss = l2c2_smoothness_loss(forward_values, state, next_state, values)
+
+        # return losses
+
+        total_loss = critic_loss + self.l2c2_smoothness_weight * l2c2_loss
+
+        if not return_loss_breakdown:
+            return total_loss
+
+        return total_loss, (critic_loss, l2c2_loss)
 
     def forward(
         self,
@@ -1098,15 +1175,10 @@ class Critics(Module):
         past_actions: Int['b past a'] | Int['past a'] | None = None,
         latents: Float['d'] | Float['b d'] | None = None
     ):
+        state, inverse_pack = pack_with_inverse(state, '* d')
 
-        # handle no batch
-
-        no_batch = state.ndim == 1
-
-        if no_batch:
-            state = rearrange(state, 'd -> 1 d')
-            if exists(past_actions):
-                past_actions = rearrange(past_actions, '... -> 1 ...')
+        if exists(past_actions) and past_actions.ndim == 2:
+            past_actions = rearrange(past_actions, '... -> 1 ...')
 
         # latents
 
@@ -1133,10 +1205,7 @@ class Critics(Module):
         values = self.mlps(state, cond = mlp_conds)
         values = rearrange(values, '... 1 -> ...')
 
-        if no_batch:
-            values = rearrange(values, '1 ... -> ...')
-
-        return values
+        return inverse_pack(values)
 
 # hierarchical controller
 
@@ -1360,7 +1429,9 @@ class Agent(Module):
 
         # ready experience data
 
-        data = (states, actions_with_past, log_probs, returns, values)
+        next_states = pad_at_dim(states[1:], (0, 1), value = 0., dim = 0)
+
+        data = (states, next_states, actions_with_past, log_probs, returns, values)
 
         data = tuple(t[learnable] for t in data)
 
@@ -1376,6 +1447,7 @@ class Agent(Module):
         for _ in tqdm(range(self.epochs), 'training epoch'):
             for (
                 states,
+                next_states,
                 actions_with_past,
                 log_probs,
                 returns,
@@ -1384,7 +1456,7 @@ class Agent(Module):
 
                 past_actions, actions = actions_with_past[:, :-1, :], actions_with_past[:, -1, :]
 
-                critics_loss = self.critics.forward_for_loss(states, past_actions = past_actions, old_values = values, rewards = returns)
+                critics_loss = self.critics.forward_for_loss(states, past_actions = past_actions, old_values = values, rewards = returns, next_state = next_states)
                 critics_loss.backward()
 
                 self.critics_optim.step()
@@ -1392,7 +1464,7 @@ class Agent(Module):
 
                 advantages = self.critics.calc_advantages(values, rewards = returns)
 
-                actor_loss = self.actor.forward_for_loss(states, actions, log_probs, advantages, past_actions = past_actions)
+                actor_loss = self.actor.forward_for_loss(states, actions, log_probs, advantages, next_state = next_states, past_actions = past_actions)
                 actor_loss.backward()
 
                 self.actor_optim.step()

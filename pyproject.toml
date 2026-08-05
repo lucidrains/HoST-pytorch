@@ -1,6 +1,6 @@
 [project]
 name = "HoST-pytorch"
-version = "0.0.48"
+version = "0.0.49"
 description = "Humanoid Standing Up"
 authors = [
     { name = "Phil Wang", email = "lucidrains@gmail.com" }
@@ -33,6 +33,7 @@ dependencies = [
     "hl-gauss-pytorch>=0.1.19",
     "pydantic>=2.0",
     "torch>=2.5",
+    "torch-einops-utils",
     'tqdm'
 ]
 
@@ -64,3 +65,11 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["HoST_pytorch"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "HoST_pytorch",
+    "README.md",
+    "LICENSE",
+    "pyproject.toml",
+]

@@ -29,13 +29,13 @@ def test_actor_critic_reward_shaper():
 
     critics = Critics([1., 2.], num_critics = 2, num_actions = 4)
 
-    loss = critics.forward_for_loss(state, rewards = torch.randn(4, 2), old_values = torch.randn(4, 2))
+    loss, (critic_main_loss, critic_l2c2_loss) = critics.forward_for_loss(state, rewards = torch.randn(4, 2), old_values = torch.randn(4, 2), next_state = torch.randn(4, 512), return_loss_breakdown = True)
     loss.backward()
 
     values = critics(state)
     advantages = critics.calc_advantages(values, rewards = torch.randn(4, 2))
 
-    policy_loss = actor.forward_for_loss(state, actions, log_prob, advantages)
+    policy_loss, (ppo_loss, actor_l2c2_loss) = actor.forward_for_loss(state, actions, log_prob, advantages, next_state = torch.randn(4, 512), return_loss_breakdown = True)
     policy_loss.backward()
 
     reward_shaping = RewardShapingWrapper(
