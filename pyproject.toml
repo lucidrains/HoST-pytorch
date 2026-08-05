@@ -1,6 +1,6 @@
 [project]
 name = "HoST-pytorch"
-version = "0.0.49"
+version = "0.0.50"
 description = "Humanoid Standing Up"
 authors = [
     { name = "Phil Wang", email = "lucidrains@gmail.com" }

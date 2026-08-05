@@ -936,8 +936,8 @@ class Actor(Module):
         l2c2_loss = self.zero
 
         if self.has_l2c2 and exists(next_state):
-            forward_actions = lambda s: self.forward(s, sample = True, sample_return_log_prob = False, past_actions = past_actions, latents = latents)
-            l2c2_loss = l2c2_smoothness_loss(forward_actions, state, next_state, actions)
+            forward_probs = lambda s: self.forward(s, sample = False, past_actions = past_actions, latents = latents)
+            l2c2_loss = l2c2_smoothness_loss(forward_probs, state, next_state, probs)
 
         # return losses
 
