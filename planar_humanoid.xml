@@ -1,0 +1,53 @@
+<mujoco model="planar_humanoid">
+  <compiler angle="radian" autolimits="true"/>
+  <option timestep="0.005" integrator="RK4" gravity="0 0 -9.81"/>
+  <default>
+    <joint damping="0.5" armature="0.01" limited="true"/>
+    <geom contype="1" conaffinity="1" condim="3" friction="1.0 0.1 0.1" rgba="0.8 0.6 0.4 1"/>
+    <position kp="250" kv="15" ctrlrange="-3 3" forcerange="-300 300"/>
+  </default>
+  <worldbody>
+    <geom name="floor" type="plane" size="10 10 .1" rgba="0.85 0.9 0.85 1"/>
+    <body name="torso" pos="0 0 0">
+      <joint name="root_x" type="slide" axis="1 0 0" limited="false"/>
+      <joint name="root_z" type="slide" axis="0 0 1" limited="false"/>
+      <joint name="root_pitch" type="hinge" axis="0 1 0" limited="true" range="-1.5 1.5" stiffness="40" damping="5"/>
+      <geom name="torso_geom" type="capsule" fromto="0 0 0 0 0 0.45" size="0.1"/>
+      <body name="head_body" pos="0 0 0.62">
+        <geom name="head" type="sphere" size="0.12" rgba="0.9 0.7 0.5 1"/>
+      </body>
+      <body name="thigh_l" pos="0 0.10 0">
+        <joint name="hip_l" type="hinge" axis="0 1 0" range="-3.0 2.0"/>
+        <geom name="thigh_l_geom" type="capsule" fromto="0 0 0 0 0 -0.32" size="0.07"/>
+        <body name="shin_l" pos="0 0 -0.32">
+          <joint name="knee_l" type="hinge" axis="0 1 0" range="-0.05 2.8"/>
+          <geom name="shin_l_geom" type="capsule" fromto="0 0 0 0 0 -0.32" size="0.055"/>
+          <body name="foot_l" pos="0 0 -0.32">
+            <joint name="ankle_l" type="hinge" axis="0 1 0" range="-1.4 1.4"/>
+            <geom name="foot_l_geom" type="box" pos="0.07 0 -0.03" size="0.12 0.055 0.03"/>
+          </body>
+        </body>
+      </body>
+      <body name="thigh_r" pos="0 -0.10 0">
+        <joint name="hip_r" type="hinge" axis="0 1 0" range="-3.0 2.0"/>
+        <geom name="thigh_r_geom" type="capsule" fromto="0 0 0 0 0 -0.32" size="0.07"/>
+        <body name="shin_r" pos="0 0 -0.32">
+          <joint name="knee_r" type="hinge" axis="0 1 0" range="-0.05 2.8"/>
+          <geom name="shin_r_geom" type="capsule" fromto="0 0 0 0 0 -0.32" size="0.055"/>
+          <body name="foot_r" pos="0 0 -0.32">
+            <joint name="ankle_r" type="hinge" axis="0 1 0" range="-1.4 1.4"/>
+            <geom name="foot_r_geom" type="box" pos="0.07 0 -0.03" size="0.12 0.055 0.03"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <position joint="hip_l" name="hip_l_motor" kp="250" kv="15"/>
+    <position joint="knee_l" name="knee_l_motor" kp="250" kv="15"/>
+    <position joint="ankle_l" name="ankle_l_motor" kp="120" kv="8"/>
+    <position joint="hip_r" name="hip_r_motor" kp="250" kv="15"/>
+    <position joint="knee_r" name="knee_r_motor" kp="250" kv="15"/>
+    <position joint="ankle_r" name="ankle_r_motor" kp="120" kv="8"/>
+  </actuator>
+</mujoco>

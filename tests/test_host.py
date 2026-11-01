@@ -38,6 +38,10 @@ def test_actor_critic_reward_shaper():
     policy_loss, (ppo_loss, actor_l2c2_loss) = actor.forward_for_loss(state, actions, log_prob, advantages, next_state = torch.randn(4, 512), return_loss_breakdown = True)
     policy_loss.backward()
 
+    # nested-tensor construction used to detach the actor loss
+    actor_grad_norm = sum(p.grad.norm().pow(2) for p in actor.parameters() if p.grad is not None).sqrt()
+    assert actor_grad_norm > 0.
+
     reward_shaping = RewardShapingWrapper(
         critics_kwargs = dict(
             num_actions = 4
@@ -52,7 +56,8 @@ def test_actor_critic_reward_shaper():
 
 @pytest.mark.parametrize('num_actions', (5, (3, 5, 2)))
 def test_e2e(
-    num_actions
+    num_actions,
+    tmp_path
 ):
 
     env = Env()
@@ -101,7 +106,7 @@ def test_e2e(
 
     agent.learn(memories)
 
-    agent.save('./standing-up-policy.pt', overwrite = True)
+    agent.save(str(tmp_path / 'standing-up-policy.pt'), overwrite = True)
 
 def test_actor_critic_with_latents():
     latent_gene_pool = LatentGenePool(

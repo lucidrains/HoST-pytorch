@@ -1,6 +1,6 @@
 [project]
 name = "HoST-pytorch"
-version = "0.0.50"
+version = "0.1.0"
 description = "Humanoid Standing Up"
 authors = [
     { name = "Phil Wang", email = "lucidrains@gmail.com" }
@@ -43,6 +43,15 @@ Repository = "https://github.com/lucidrains/HoST-pytorch"
 
 [project.optional-dependencies]
 examples = []
+mujoco = [
+    "gymnasium[mujoco]>=1.0.0",
+    "imageio",
+]
+train = [
+    "gymnasium[mujoco]>=1.0.0",
+    "imageio",
+    "matplotlib",
+]
 test = [
     "pytest"
 ]
@@ -64,11 +73,11 @@ dev-dependencies = []
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["HoST_pytorch"]
+packages = ["host_pytorch"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "HoST_pytorch",
+    "host_pytorch",
     "README.md",
     "LICENSE",
     "pyproject.toml",

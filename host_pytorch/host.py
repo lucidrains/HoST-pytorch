@@ -15,7 +15,6 @@ from collections import namedtuple, OrderedDict
 from tqdm import tqdm
 
 import torch
-from torch.nested import nested_tensor
 from torch import nn, Tensor, tensor, is_tensor, cat, stack
 import torch.nn.functional as F
 from torch.optim import Adam
@@ -38,8 +37,8 @@ from evolutionary_policy_optimization import LatentGenePool
 # einstein notation related
 
 import einx
-from einops import repeat, rearrange, reduce, pack
-from einops.layers.torch import Rearrange, Reduce, EinMix as Mix
+from einops import repeat, rearrange, pack
+from einops.layers.torch import Rearrange, EinMix as Mix
 
 # b - batch
 # t - time
@@ -59,9 +58,6 @@ def exists(v):
 def default(v, d):
     return v if exists(v) else d
 
-def first(arr):
-    return arr[0]
-
 def xnor(x, y):
     return not (x ^ y)
 
@@ -73,9 +69,6 @@ def cast_tuple(t):
 
 def cast_tensor(t):
     return t if is_tensor(t) else tensor(t)
-
-def is_unique_els(arr):
-    assert len(arr) == len(set(arr))
 
 def safe_cat(acc, el, dim = -1):
     if not exists(acc):
@@ -91,10 +84,6 @@ def log(t, eps = 1e-20):
 def is_empty(t):
     return t.numel() == 0
 
-def exclusive_cumsum(t):
-    t = t.cumsum(dim = -1)
-    return F.pad(t, (1, -1), value = 0)
-
 def safe_div(num, den, eps = 1e-8):
     den = den.clamp(min = eps) if is_tensor(den) else max(den, eps)
     return num / den
@@ -109,37 +98,7 @@ def gumbel_noise(t):
     noise = torch.rand_like(t)
     return -log(-log(noise))
 
-# nested tensor related
-
-def to_nested_tensor_and_inverse(tensors):
-    jagged_dims = tuple(t.shape[-1] for t in tensors)
-
-    tensor = cat(tensors, dim = -1)
-    batch = tensor.shape[0]
-
-    tensor = rearrange(tensor, 'b n -> (b n)')
-    nt = nested_tensor(tensor.split(jagged_dims * batch), layout = torch.jagged, device = tensor.device, requires_grad = True)
-
-    def inverse(t):
-        t = cat(t.unbind())
-        return rearrange(t, '(b n) -> b n', b = batch)
-
-    return nt, inverse
-
-def nested_sum(t, lens: tuple[int, ...]):
-    # needed as backwards not supported for sum with nested tensor
-
-    batch, device = t.shape[0], t.device
-
-    lens = tensor(lens, device = device)
-    indices = lens.cumsum(dim = -1) - 1
-    indices = repeat(indices, 'n -> b n', b = batch)
-
-    cumsum = t.cumsum(dim = -1)
-    sum_at_indices = cumsum.gather(-1, indices)
-    sum_at_indices = F.pad(sum_at_indices, (1, 0), value = 0.)
-
-    return sum_at_indices[..., 1:] - sum_at_indices[..., :-1]
+# ragged action groups
 
 def nested_argmax(t, lens: tuple[int, ...]):
     batch, device = t.shape[0], t.device
@@ -473,13 +432,13 @@ def reward_base_linear_velocity(state: State, hparam: HyperParams, derived_state
     """ It encourages low linear velocity of robot base after standing up. """
 
     linear_velocity_base = state.linear_velocity[:2]
-    return derived_state.past_stage2 * linear_velocity_base.norm().pow(2).mul(-2).exp()
+    return derived_state.past_stage2 * linear_velocity_base.norm().pow(2).mul(-5).exp()
 
 def reward_post_task_base_orientation(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
     """ It encourages the robot base to be perpendicular to the ground. """
 
     orientation_base = state.orientation[:2]
-    return derived_state.past_stage2 * orientation_base.norm().pow(2).mul(-2).exp()
+    return derived_state.past_stage2 * orientation_base.norm().pow(2).mul(-5).exp()
 
 def reward_base_height(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
     """ It encourages the robot base to reach a target height. """
@@ -489,7 +448,7 @@ def reward_base_height(state: State, hparam: HyperParams, derived_state: SimpleN
 def reward_upper_body_posture(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
     """ It encourages the robot to track a target upper body postures. """
 
-    return derived_state.past_stage2 * (state.upper_body_posture - hparam.upper_body_posture_target).norm().pow(2).mul(-1.).exp()
+    return derived_state.past_stage2 * (state.upper_body_posture - hparam.upper_body_posture_target).norm().pow(2).mul(-0.1).exp()
 
 def reward_feet_parallel(state: State, hparam: HyperParams, derived_state: SimpleNamespace, past_actions = None):
     """ In encourages the feet to be parallel to each other. """
@@ -543,14 +502,14 @@ DEFAULT_REWARD_SHAPING_CONFIG = dict(
         ]),
         ('style', 1., [
             (reward_waist_yaw_deviation, -10),
-            (reward_hip_roll_yaw_deviation, -10 / 10),
-            (reward_knee_deviation, -0.25 / -10),
+            (reward_hip_roll_yaw_deviation, -10),
+            (reward_knee_deviation, -0.25),
             (reward_shoulder_roll_deviation, -2.5),
-            (reward_foot_displacement, 2.5 / 2.5),
+            (reward_foot_displacement, 2.5),
             (reward_ankle_parallel, 20),
             (reward_foot_distance, -10),
-            (reward_foot_stumble, 0 / -25),
-            (reward_shank_orientation, 10), # do not understand this 0(G) / -25(PSW)
+            (reward_foot_stumble, 0.),
+            (reward_shank_orientation, 10),
             (reward_style_base_angular_velocity, 1),
         ]),
         ('regularization', 0.1, [
@@ -781,7 +740,7 @@ class PastActionsNet(Module):
         all_actions_are_padding = is_padding.all(dim = -1)
 
         action_embed = action_embed.masked_fill(all_actions_are_padding[..., None, :], 0.)
-        return reduce(action_embed, '... past -> ...', 'sum')
+        return action_embed.sum(dim = -1)
 
 # actor
 
@@ -907,19 +866,23 @@ class Actor(Module):
 
         logits_per_action_set = logits.split(self.num_actions, dim = -1)
 
-        nested_logits, inverse_nested = to_nested_tensor_and_inverse(logits_per_action_set)
+        # per-group log-softmax keeps autograd attached (nested tensors detach inputs)
 
-        nested_probs = nested_logits.softmax(dim = -1)
+        log_probs_per_set = []
+        probs_per_set = []
+        entropies_per_set = []
 
-        probs = inverse_nested(nested_probs)
+        for logits_set, actions_set in zip(logits_per_action_set, actions.unbind(dim = -1)):
+            log_probs_set = logits_set.log_softmax(dim = -1)
+            probs_set = log_probs_set.exp()
 
-        # entropy
+            log_probs_per_set.append(log_probs_set.gather(-1, actions_set[..., None]).squeeze(-1))
+            probs_per_set.append(probs_set)
+            entropies_per_set.append(-(probs_set * log_probs_set).sum(dim = -1))
 
-        entropies = nested_sum(-probs * log(probs), self.num_actions)
-
-        indices = actions + self.action_offset
-
-        log_probs = log(probs).gather(-1, indices)
+        probs = cat(probs_per_set, dim = -1)
+        log_probs = stack(log_probs_per_set, dim = -1)
+        entropies = stack(entropies_per_set, dim = -1)
 
         ratios = (log_probs - old_log_probs).exp()
 
@@ -929,7 +892,7 @@ class Actor(Module):
         surr2 = ratios.clamp(1. - clip, 1. + clip) * advantages
         ppo_loss = -torch.min(surr1, surr2) - self.entropy_weight * entropies
 
-        ppo_loss = reduce(ppo_loss, 'b a -> b', 'sum').mean()
+        ppo_loss = ppo_loss.sum(dim = -1).mean()
 
         # l2c2 smoothness regularization
 
@@ -969,11 +932,7 @@ class Actor(Module):
 
         logits_per_action_set = logits.split(self.num_actions, dim = -1)
 
-        nested_logits, inverse_nested = to_nested_tensor_and_inverse(logits_per_action_set)
-
-        nested_probs = nested_logits.softmax(dim = -1)
-
-        probs = inverse_nested(nested_probs)
+        probs = cat([F.softmax(logits_set, dim = -1) for logits_set in logits_per_action_set], dim = -1)
 
         if not sample:
             return inverse_pack(probs)
@@ -1130,7 +1089,7 @@ class Critics(Module):
         norm_advantages = F.layer_norm(advantages, (batch,))
 
         weighted_norm_advantages = einx.multiply('g b, g', norm_advantages, self.weights)
-        return reduce(weighted_norm_advantages, 'g b -> b', 'sum')
+        return weighted_norm_advantages.sum(dim = 0)
 
     def forward_for_loss(
         self,
@@ -1150,7 +1109,7 @@ class Critics(Module):
         loss = F.mse_loss(values, rewards, reduction = 'none')
         clipped_loss = F.mse_loss(clipped_value, rewards, reduction = 'none')
 
-        critic_loss = torch.max(loss, clipped_loss).mean()
+        critic_loss = torch.maximum(loss, clipped_loss).mean()
 
         # l2c2 smoothness regularization
 
@@ -1264,6 +1223,7 @@ class Agent(Module):
         reward_hparams: HyperParams | dict | None = None,
         num_episodes = 5,
         max_episode_timesteps = 100,
+        actor_sample_temperature = 1.,
         gae_gamma = 0.99,
         gae_lam = 0.95,
         calc_gae_use_accelerated = None,
@@ -1303,6 +1263,7 @@ class Agent(Module):
 
         self.num_episodes = num_episodes
         self.max_episode_timesteps = max_episode_timesteps
+        self.actor_sample_temperature = actor_sample_temperature
 
         # domain randomization related
 
@@ -1412,20 +1373,24 @@ class Agent(Module):
 
         # prepare past actions
 
-        episode_num = exclusive_cumsum(dones)
+        episode_num = exclusive_cumsum(dones.long())
 
-        actions = F.pad(actions, (0, 0, self.num_past_actions, 0), value = -1)
+        if self.num_past_actions > 0:
+            actions = F.pad(actions, (0, 0, self.num_past_actions, 0), value = -1)
 
-        actions_with_past = actions.unfold(0, self.num_past_actions + 1, 1)
+            actions_with_past = actions.unfold(0, self.num_past_actions + 1, 1)
 
-        episode_num_with_past = F.pad(episode_num, (self.num_past_actions, 0), value = 0)
-        episode_num_with_past = episode_num_with_past.unfold(0, self.num_past_actions + 1, 1)
+            episode_num_with_past = F.pad(episode_num, (self.num_past_actions, 0), value = 0)
+            episode_num_with_past = episode_num_with_past.unfold(0, self.num_past_actions + 1, 1)
 
-        actions_with_past = rearrange(actions_with_past, 't a past -> t past a')
+            # unfold moves the window to the last dim: t x a x past -> t x past x a
+            actions_with_past = rearrange(actions_with_past, 't a past -> t past a')
 
-        is_episode_overlap = episode_num[..., None] != episode_num_with_past
+            is_episode_overlap = episode_num[..., None] != episode_num_with_past
 
-        actions_with_past = actions_with_past.masked_fill(is_episode_overlap[..., None], -1)
+            actions_with_past = actions_with_past.masked_fill(is_episode_overlap[..., None], -1)
+        else:
+            actions_with_past = rearrange(actions, 't a -> t 1 a')
 
         # ready experience data
 
@@ -1454,7 +1419,8 @@ class Agent(Module):
                 values
             ) in dataloader:
 
-                past_actions, actions = actions_with_past[:, :-1, :], actions_with_past[:, -1, :]
+                past_actions = actions_with_past[:, :-1, :] if self.num_past_actions > 0 else None
+                actions = actions_with_past[:, -1, :]
 
                 critics_loss = self.critics.forward_for_loss(states, past_actions = past_actions, old_values = values, rewards = returns, next_state = next_states)
                 critics_loss.backward()
@@ -1481,7 +1447,6 @@ class Agent(Module):
         self.critics.eval()
 
         memories = []
-        memory = None
 
         for _ in tqdm(range(self.num_episodes), desc = 'episodes'):
 
@@ -1489,8 +1454,8 @@ class Agent(Module):
 
             env_reset_kwargs = dict()
             if exists(self.env_hparams):
-                env_hparam = choice(self.env_params)
-                env_reset_kwargs.update(env_hparam = env_hparam)
+                env_hparam = choice(self.env_hparams)
+                env_reset_kwargs.update(env_hparams = env_hparam)
 
             state = env.reset(**env_reset_kwargs)
 
@@ -1499,8 +1464,9 @@ class Agent(Module):
             while timestep < self.max_episode_timesteps:
 
                 # State -> Float['state_dim']
+                # envs may expose a compact policy observation separate from the reward state
 
-                state_tensor = state_to_tensor(state)
+                state_tensor = env.state_tensor(state) if hasattr(env, 'state_tensor') else state_to_tensor(state)
 
                 # rewards are derived from the state
 
@@ -1509,9 +1475,18 @@ class Agent(Module):
                 # sample the action from the actor
                 # and get the values from the critics
 
-                actor_critic_past_actions = past_actions[-self.num_past_actions:] if exists(past_actions) else None
+                actor_critic_past_actions = past_actions[-self.num_past_actions:] if exists(past_actions) and self.num_past_actions > 0 else None
 
-                actions, log_probs = self.actor(state_tensor, sample = True, past_actions = actor_critic_past_actions)
+                actions, log_probs = self.actor(
+                    state_tensor,
+                    sample = True,
+                    sample_temperature = self.actor_sample_temperature,
+                    past_actions = actor_critic_past_actions
+                )
+
+                # single action set collapses to a scalar for unbatched states
+                actions = actions.reshape(-1)
+                log_probs = log_probs.reshape(-1)
 
                 values = self.critics(state_tensor, past_actions = actor_critic_past_actions)
 
@@ -1542,18 +1517,11 @@ class Agent(Module):
 
                 timestep += 1
 
-        # add a non-learnable memory
+                episode_done = timestep >= self.max_episode_timesteps or bool(getattr(env, 'done', False))
 
-        state_tensor = state_to_tensor(state)
-        next_value = self.critics(state_tensor)
-
-        memory = memory._replace(
-            learnable = tensor(False),
-            values = next_value,
-            done = tensor(True)
-        )
-
-        memories.append(memory)
+                if episode_done:
+                    memories[-1] = memories[-1]._replace(done = tensor(True))
+                    break
 
         # return memories
 

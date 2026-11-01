@@ -14,14 +14,14 @@ from einops import pack
 
 def mock_hparams():
     return HyperParams(
-        height_stage1_thres = randn(()),
-        height_stage2_thres = randn(()),
-        joint_velocity_abs_limit = randn((3,)),
-        joint_position_PD_target = randn((3,)),
-        joint_position_lower_limit = randn((3,)),
-        joint_position_higher_limit = randn((3,)),
-        upper_body_posture_target = randn((3,)),
-        height_base_target = randn(()),
+        height_stage1_thres = 0.5,
+        height_stage2_thres = 1.,
+        joint_velocity_abs_limit = tensor([10., 10., 10.]),
+        joint_position_PD_target = torch.zeros(3),
+        joint_position_lower_limit = torch.full((3,), -torch.pi),
+        joint_position_higher_limit = torch.full((3,), torch.pi),
+        upper_body_posture_target = torch.zeros(3),
+        height_base_target = 1.,
         ankle_parallel_thres = 0.05,
         joint_power_T = 1.,
         feet_parallel_min_height_diff = 0.02,
@@ -87,6 +87,7 @@ class Env(Module):
     def reset(
         self,
         env_hparams = dict(),
+        **kwargs
     ) -> State:
         return random_state()
 
