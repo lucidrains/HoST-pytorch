@@ -146,3 +146,22 @@ def test_actor_critic_with_latents():
     )
 
     loss.backward()
+
+def test_planar_humanoid_reset_clears_ctrl():
+    pytest.importorskip('mujoco')
+    from mujoco_env import PlanarHumanoidEnv
+
+    env = PlanarHumanoidEnv(seed = 0)
+
+    state_first = env.reset(seed = 42)
+    obs_first = env.state_tensor().clone()
+
+    env.step([env.num_bins - 1] * 6)
+    assert (env.data.ctrl != 0.).any()
+
+    state_second = env.reset(seed = 42)
+    obs_second = env.state_tensor().clone()
+
+    assert (env.data.ctrl == 0.).all()
+    assert torch.allclose(state_first.joint_torque, state_second.joint_torque)
+    assert torch.allclose(obs_first, obs_second)

@@ -306,6 +306,7 @@ class PlanarHumanoidEnv:
 
         self.data.qpos[:] = qpos
         self.data.qvel[:] = np.random.uniform(-0.03, 0.03, self.model.nv)
+        self.data.ctrl[:] = 0.
         self.data.xfrc_applied[:] = 0.
         self.mujoco.mj_forward(self.model, self.data)
 
